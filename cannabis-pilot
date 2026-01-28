@@ -1,0 +1,14 @@
+cannabis-pilot/
+  app/
+    layout.js
+    page.js
+    onboarding/page.js
+    recommendations/page.js
+    report/page.js
+  lib/
+    supabaseClient.js
+  styles/
+    globals.css
+  package.json
+  next.config.js
+  .env.example
