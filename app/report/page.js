@@ -34,16 +34,17 @@ const LIKE_REASONS = [
   { k: "balanced", t: "מאוזן ולא כבד" }
 ];
 
+function splitCsv(s) {
+  return (s || "").split(",").map(x => x.trim()).filter(Boolean);
+}
+
 export default function Report() {
   const [session, setSession] = useState(null);
+  const [profile, setProfile] = useState(null);
+
   const [liked, setLiked] = useState(null); // true/false
   const [strainId, setStrainId] = useState("");
   const [msg, setMsg] = useState("");
-
-  // common context for liked
-  const [grams, setGrams] = useState(0.3);
-  const [mix, setMix] = useState("tobacco");
-  const [goal, setGoal] = useState("calm");
 
   // effects (liked)
   const [energy, setEnergy] = useState(5);
@@ -70,6 +71,21 @@ export default function Report() {
     supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
   }, []);
 
+  // load user profile for defaults
+  useEffect(() => {
+    async function loadProfile() {
+      if (!session) return;
+      const { data, error } = await supabase
+        .from("users_profile")
+        .select("*")
+        .eq("user_id", session.user.id)
+        .single();
+
+      if (!error) setProfile(data);
+    }
+    loadProfile();
+  }, [session]);
+
   function toggle(arr, setArr, v, max = 2) {
     const has = arr.includes(v);
     const next = has ? arr.filter(x => x !== v) : [...arr, v];
@@ -79,18 +95,27 @@ export default function Report() {
   async function submit() {
     setMsg("");
     if (!session) return setMsg("צריך להתחבר.");
+    if (!profile) return setMsg("חסר פרופיל. מלא שאלון היכרות קודם.");
     if (!strainId.trim()) return setMsg("הכנס strain_id (למשל S0001).");
 
     if (liked === true && likeReasons.length === 0) return setMsg("בחר עד 2 סיבות למה אהבת.");
     if (liked === false && dislikeReasons.length === 0) return setMsg("בחר לפחות סיבה אחת למה לא אהבת.");
     if (liked === false && dislikeReasons.includes("bad_taste") && !tasteDetail) return setMsg("בחר מה הפריע בטעם.");
 
+    const defaultGoal =
+      profile.default_goal_tag ||
+      splitCsv(profile.preferred_direction_tags)[0] ||
+      "calm";
+
     const payload = {
       user_id: session.user.id,
       strain_id: strainId.trim(),
-      session_grams: grams,
-      is_pure_consumption: mix,
-      session_goal_tag: goal,
+
+      // default session context from profile
+      session_grams: profile.typical_session_grams ?? 0.3,
+      is_pure_consumption: profile.mix_preference ?? "tobacco",
+      session_goal_tag: defaultGoal,
+
       duration_hours: duration,
       user_short_review: review.slice(0, 150),
       liked_flag: liked === true,
@@ -116,17 +141,27 @@ export default function Report() {
 
     const { error } = await supabase.from("reports").insert(payload);
     if (error) return setMsg(error.message);
+
     setMsg("נשמר דיווח ✅");
     setLiked(null);
     setStrainId("");
+    setLikeReasons([]);
+    setDislikeReasons([]);
+    setTasteDetail("");
   }
 
   return (
     <div className="card">
       <div className="h1">דיווח על זן</div>
-      <div className="small">בחר “אהבתי” או “לא אהבתי”. ב־“לא אהבתי” אין חלק A (כמו שסיכמנו).</div>
+      <div className="small">בחר “אהבתי” או “לא אהבתי”. פרטי הסשן נלקחים מהפרופיל האישי.</div>
 
       {!session && <div className="small" style={{ marginTop: 10 }}>צריך להתחבר קודם.</div>}
+
+      {!profile && session && (
+        <div className="small" style={{ marginTop: 10 }}>
+          חסר פרופיל. קודם מלא <a href="/onboarding">שאלון היכרות</a>.
+        </div>
+      )}
 
       <div className="hr" />
 
@@ -140,31 +175,9 @@ export default function Report() {
 
       <div className="h2">2) זן</div>
       <input className="input" placeholder="strain_id (למשל S0001)" value={strainId} onChange={(e) => setStrainId(e.target.value)} />
-      <div className="small" style={{ marginTop: 6 }}>
-        MVP מהיר: כרגע מכניסים ID. בשלב הבא נחבר לבחירה מתוך מלאי + “הקנייה האחרונה”.
-      </div>
 
       {liked === true && (
         <>
-          <div className="hr" />
-          <div className="h2">פרטי סשן</div>
-          <div className="row">
-            <input className="input" type="number" step="0.05" value={grams} onChange={(e) => setGrams(Number(e.target.value))} />
-            <select className="input" value={mix} onChange={(e) => setMix(e.target.value)}>
-              <option value="pure">נקי</option>
-              <option value="tobacco">עם טבק</option>
-            </select>
-            <select className="input" value={goal} onChange={(e) => setGoal(e.target.value)}>
-              <option value="sleep">שינה</option>
-              <option value="calm">רוגע</option>
-              <option value="mood">מצב רוח</option>
-              <option value="focus">פוקוס</option>
-              <option value="pain_body">כאב גוף</option>
-              <option value="social">חברתי</option>
-              <option value="creativity">יצירתיות</option>
-            </select>
-          </div>
-
           <div className="hr" />
           <div className="h2">השפעות (1–10, 5 נייטרלי)</div>
           {[
@@ -190,8 +203,12 @@ export default function Report() {
           <div className="h2">למה אהבת? (עד 2)</div>
           <div className="row">
             {LIKE_REASONS.map(r => (
-              <button key={r.k} className={"btn " + (likeReasons.includes(r.k) ? "btnPrimary" : "")}
-                onClick={() => toggle(likeReasons, setLikeReasons, r.k, 2)}>
+              <button
+                key={r.k}
+                className={"btn " + (likeReasons.includes(r.k) ? "btnPrimary" : "")}
+                onClick={() => toggle(likeReasons, setLikeReasons, r.k, 2)}
+                style={{ color: likeReasons.includes(r.k) ? undefined : "#111" }}
+              >
                 {r.t}
               </button>
             ))}
@@ -205,8 +222,12 @@ export default function Report() {
           <div className="h2">למה לא אהבת? (עד 2)</div>
           <div className="row">
             {DISLIKE_REASONS.map(r => (
-              <button key={r.k} className={"btn " + (dislikeReasons.includes(r.k) ? "btnDanger" : "")}
-                onClick={() => toggle(dislikeReasons, setDislikeReasons, r.k, 2)}>
+              <button
+                key={r.k}
+                className={"btn " + (dislikeReasons.includes(r.k) ? "btnDanger" : "")}
+                onClick={() => toggle(dislikeReasons, setDislikeReasons, r.k, 2)}
+                style={{ color: dislikeReasons.includes(r.k) ? undefined : "#111" }}
+              >
                 {r.t}
               </button>
             ))}
@@ -223,8 +244,12 @@ export default function Report() {
               <div className="h2">מה הפריע בטעם?</div>
               <div className="row">
                 {DISLIKE_TASTE.map(t => (
-                  <button key={t.k} className={"btn " + (tasteDetail === t.k ? "btnDanger" : "")}
-                    onClick={() => setTasteDetail(t.k)}>
+                  <button
+                    key={t.k}
+                    className={"btn " + (tasteDetail === t.k ? "btnDanger" : "")}
+                    onClick={() => setTasteDetail(t.k)}
+                    style={{ color: tasteDetail === t.k ? undefined : "#111" }}
+                  >
                     {t.t}
                   </button>
                 ))}
