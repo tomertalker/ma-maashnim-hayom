@@ -12,11 +12,44 @@ const REASONS = [
   { k: "taste_aroma", t: "טעם/ארומה" }
 ];
 
+const FLAVORS = [
+  { k: "citrus", t: "הדרי" },
+  { k: "pine", t: "אורן" },
+  { k: "earthy", t: "אדמתי" },
+  { k: "gassy", t: "דיזל/גזי" },
+  { k: "floral", t: "פרחוני" },
+  { k: "spicy", t: "חריף/פלפלי" },
+  { k: "sweet", t: "מתוק" }
+];
+
+const DIRECTIONS = [
+  { k: "calm", t: "רוגע" },
+  { k: "focus", t: "פוקוס" },
+  { k: "sleep", t: "שינה" },
+  { k: "mood", t: "מצב רוח" },
+  { k: "pain_body", t: "כאב/גוף" },
+  { k: "social", t: "חברתי" },
+  { k: "creativity", t: "יצירתיות" }
+];
+
+function splitCsv(s) {
+  return (s || "").split(",").map(x => x.trim()).filter(Boolean);
+}
+
+function toCsv(arr) {
+  return (arr || []).join(",");
+}
+
 export default function Onboarding() {
   const [session, setSession] = useState(null);
   const [products, setProducts] = useState([]);
   const [q, setQ] = useState("");
+
   const [selected, setSelected] = useState([]); // [{strain_id, name_he, reasons:[]}]
+  const [flavors, setFlavors] = useState(["citrus", "pine"]); // multi
+  const [directions, setDirections] = useState(["calm", "focus"]); // multi
+  const [notes, setNotes] = useState(""); // free text
+
   const [profile, setProfile] = useState({
     consent_given: true,
     condition_1: "pain",
@@ -27,12 +60,27 @@ export default function Onboarding() {
     typical_session_grams: 0.3,
     sessions_per_day_band: "1_2",
     experience_level: "intermediate",
-    preferred_flavor_tags: "citrus,pine",
     citrus_preference: "bitter_grapefruit",
-    earthy_tolerance: "avoid_strong",
-    preferred_direction_tags: "calm,focus"
+    earthy_tolerance: "avoid_strong"
   });
+
   const [msg, setMsg] = useState("");
+
+  // Simple “pill button” styles that are readable on mobile
+  const pillBase = {
+    background: "#fff",
+    color: "#111",
+    border: "1px solid #ddd",
+    borderRadius: 12,
+    padding: "10px 12px",
+    fontWeight: 700
+  };
+
+  const pillSelected = {
+    background: "#111",
+    color: "#fff",
+    border: "1px solid #111"
+  };
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
@@ -52,14 +100,12 @@ export default function Onboarding() {
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
-    if (!s) return products.slice(0, 80);
-    return products
-      .filter(p =>
-        (p.name_he || "").toLowerCase().includes(s) ||
-        (p.name_en || "").toLowerCase().includes(s) ||
-        (p.strain_id || "").toLowerCase().includes(s)
-      )
-      .slice(0, 80);
+    if (!s) return products;
+    return products.filter(p =>
+      (p.name_he || "").toLowerCase().includes(s) ||
+      (p.name_en || "").toLowerCase().includes(s) ||
+      (p.strain_id || "").toLowerCase().includes(s)
+    );
   }, [q, products]);
 
   function toggleSelect(p) {
@@ -69,7 +115,7 @@ export default function Onboarding() {
       setSelected(selected.filter(x => x.strain_id !== p.strain_id));
       return;
     }
-    // ✅ אין יותר מגבלת 5 — אפשר לבחור כמה שרוצים
+    // אין מקסימום — אפשר לבחור כמה שרוצים
     setSelected([...selected, { strain_id: p.strain_id, name_he: p.name_he, reasons: [] }]);
   }
 
@@ -83,20 +129,31 @@ export default function Onboarding() {
     }));
   }
 
+  function toggleMulti(v, arr, setArr) {
+    const has = arr.includes(v);
+    const next = has ? arr.filter(x => x !== v) : [...arr, v];
+    setArr(next);
+  }
+
   async function saveProfile() {
     setMsg("");
     if (!session) return setMsg("צריך להתחבר קודם.");
-
-    // ✅ מינימום 3, מקסימום חופשי
     if (selected.length < 3) return setMsg("בחר לפחות 3 זנים שעבדו לך.");
 
-    // enforce each selected has at least 1 reason (soft)
     const missingReason = selected.find(s => s.reasons.length === 0);
     if (missingReason) return setMsg(`בחר סיבה אחת לפחות עבור: ${missingReason.name_he || missingReason.strain_id}`);
 
     const payload = {
       user_id: session.user.id,
       ...profile,
+
+      // בסיס הפרופיל להמלצות
+      preferred_flavor_tags: toCsv(flavors),
+      preferred_direction_tags: toCsv(directions),
+
+      // הערות חופשי (דורש עמודה בטבלה — הסבר למטה)
+      onboarding_notes: notes,
+
       liked_strains: selected.map(s => ({ strain_id: s.strain_id, reasons: s.reasons }))
     };
 
@@ -109,192 +166,66 @@ export default function Onboarding() {
   return (
     <div className="card">
       <div className="h1">שאלון היכרות</div>
-      <div className="small">
-        שלב 1: פרטים כלליים · שלב 2: בחירת זנים (מינימום 3, בלי מקסימום) + סיבה (עד 2) לכל זן.
-      </div>
+      <div className="small">1) בוחרים זנים שעבדו · 2) טעמים/כיוונים · 3) הערות · ואז שומרים</div>
 
       {!session && <div className="small" style={{ marginTop: 10 }}>צריך להתחבר קודם.</div>}
 
       <div className="hr" />
 
-      {/* ✅ שלב 1: שאלון היכרות בסיסי */}
-      <div className="h2">1) פרטים כלליים (ממלאים פעם אחת לכל מטופל)</div>
-
-      <div className="small" style={{ marginBottom: 6 }}>מה המטרה העיקרית?</div>
-      <select
+      <div className="h2">1) בחירת זנים שעבדו לך (מינימום 3, בלי מקסימום)</div>
+      <input
         className="input"
-        value={profile.condition_1}
-        onChange={(e) => setProfile(p => ({ ...p, condition_1: e.target.value }))}
+        placeholder="חיפוש לפי שם/ID…"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+      />
+
+      {/* Scrollable box */}
+      <div
+        className="list"
+        style={{
+          marginTop: 10,
+          maxHeight: 360,
+          overflowY: "auto",
+          border: "1px solid #e6e6e6",
+          borderRadius: 12,
+          padding: 8
+        }}
       >
-        <option value="pain">כאב</option>
-        <option value="sleep">שינה</option>
-        <option value="anxiety">חרדה/לחץ</option>
-        <option value="mood">מצב רוח</option>
-        <option value="other">אחר</option>
-      </select>
-
-      <div className="small" style={{ marginTop: 10, marginBottom: 6 }}>בעיה/מטרה נוספת (אופציונלי)</div>
-      <input
-        className="input"
-        placeholder="לדוגמה: כאבי ראש / PTSD / פוקוס..."
-        value={profile.condition_2}
-        onChange={(e) => setProfile(p => ({ ...p, condition_2: e.target.value }))}
-      />
-
-      <div className="row" style={{ marginTop: 10 }}>
-        <div style={{ flex: 1 }}>
-          <div className="small" style={{ marginBottom: 6 }}>שיטת שימוש</div>
-          <select
-            className="input"
-            value={profile.preferred_method}
-            onChange={(e) => setProfile(p => ({ ...p, preferred_method: e.target.value }))}
-          >
-            <option value="smoke">עישון</option>
-            <option value="vape">אידוי</option>
-            <option value="oil">שמן/טיפות</option>
-            <option value="other">אחר</option>
-          </select>
-        </div>
-
-        <div style={{ flex: 1 }}>
-          <div className="small" style={{ marginBottom: 6 }}>ערבוב</div>
-          <select
-            className="input"
-            value={profile.mix_preference}
-            onChange={(e) => setProfile(p => ({ ...p, mix_preference: e.target.value }))}
-          >
-            <option value="pure">נקי</option>
-            <option value="tobacco">עם טבק</option>
-          </select>
-        </div>
-      </div>
-
-      <div className="row" style={{ marginTop: 10 }}>
-        <div style={{ flex: 1 }}>
-          <div className="small" style={{ marginBottom: 6 }}>מתי לרוב מתחילים ביום?</div>
-          <select
-            className="input"
-            value={profile.daily_start_time}
-            onChange={(e) => setProfile(p => ({ ...p, daily_start_time: e.target.value }))}
-          >
-            <option value="morning">בוקר</option>
-            <option value="noon">צהריים</option>
-            <option value="evening">ערב</option>
-            <option value="night">לילה</option>
-          </select>
-        </div>
-
-        <div style={{ flex: 1 }}>
-          <div className="small" style={{ marginBottom: 6 }}>גרמים לסשן טיפוסי</div>
-          <input
-            className="input"
-            type="number"
-            step="0.05"
-            value={profile.typical_session_grams}
-            onChange={(e) => setProfile(p => ({ ...p, typical_session_grams: Number(e.target.value) }))}
-          />
-        </div>
-      </div>
-
-      <div className="row" style={{ marginTop: 10 }}>
-        <div style={{ flex: 1 }}>
-          <div className="small" style={{ marginBottom: 6 }}>כמה סשנים ביום?</div>
-          <select
-            className="input"
-            value={profile.sessions_per_day_band}
-            onChange={(e) => setProfile(p => ({ ...p, sessions_per_day_band: e.target.value }))}
-          >
-            <option value="0_1">0–1</option>
-            <option value="1_2">1–2</option>
-            <option value="3_4">3–4</option>
-            <option value="5_plus">5+</option>
-          </select>
-        </div>
-
-        <div style={{ flex: 1 }}>
-          <div className="small" style={{ marginBottom: 6 }}>רמת ניסיון</div>
-          <select
-            className="input"
-            value={profile.experience_level}
-            onChange={(e) => setProfile(p => ({ ...p, experience_level: e.target.value }))}
-          >
-            <option value="new">חדש/ה</option>
-            <option value="intermediate">בינוני</option>
-            <option value="experienced">מנוסה</option>
-          </select>
-        </div>
-      </div>
-
-      <div className="small" style={{ marginTop: 10, marginBottom: 6 }}>טעמים מועדפים (רשימה מופרדת בפסיקים)</div>
-      <input
-        className="input"
-        placeholder="לדוגמה: citrus,pine,gassy"
-        value={profile.preferred_flavor_tags}
-        onChange={(e) => setProfile(p => ({ ...p, preferred_flavor_tags: e.target.value }))}
-      />
-
-      <div className="row" style={{ marginTop: 10 }}>
-        <div style={{ flex: 1 }}>
-          <div className="small" style={{ marginBottom: 6 }}>סוג הדרים אהוב</div>
-          <select
-            className="input"
-            value={profile.citrus_preference}
-            onChange={(e) => setProfile(p => ({ ...p, citrus_preference: e.target.value }))}
-          >
-            <option value="bitter_grapefruit">אשכולית מרירה</option>
-            <option value="orange">תפוזי</option>
-            <option value="lemon">לימוני</option>
-            <option value="any">לא משנה</option>
-          </select>
-        </div>
-
-        <div style={{ flex: 1 }}>
-          <div className="small" style={{ marginBottom: 6 }}>סבילות לאדמתי</div>
-          <select
-            className="input"
-            value={profile.earthy_tolerance}
-            onChange={(e) => setProfile(p => ({ ...p, earthy_tolerance: e.target.value }))}
-          >
-            <option value="avoid_strong">להימנע מחזק</option>
-            <option value="ok">בסדר</option>
-            <option value="love">אוהב/ת</option>
-          </select>
-        </div>
-      </div>
-
-      <div className="small" style={{ marginTop: 10, marginBottom: 6 }}>כיוון מועדף (רשימה מופרדת בפסיקים)</div>
-      <input
-        className="input"
-        placeholder="לדוגמה: calm,focus,sleep"
-        value={profile.preferred_direction_tags}
-        onChange={(e) => setProfile(p => ({ ...p, preferred_direction_tags: e.target.value }))}
-      />
-
-      <div className="hr" />
-
-      {/* ✅ שלב 2: Seeds */}
-      <div className="h2">2) בחירת זנים (Seeds)</div>
-      <div className="small" style={{ marginBottom: 8 }}>
-        נבחרו כרגע: <b>{selected.length}</b> (מינימום 3)
-      </div>
-
-      <input className="input" placeholder="חיפוש לפי שם/ID…" value={q} onChange={(e) => setQ(e.target.value)} />
-
-      <div className="list" style={{ marginTop: 10 }}>
         {filtered.map(p => {
           const isSel = !!selected.find(x => x.strain_id === p.strain_id);
           return (
             <button
               key={p.strain_id}
               className="btn"
-              style={{ textAlign: "left", display: "flex", justifyContent: "space-between" }}
+              style={{
+                width: "100%",
+                textAlign: "left",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 10,
+                ...pillBase,
+                ...(isSel ? pillSelected : {})
+              }}
               onClick={() => toggleSelect(p)}
             >
               <div>
-                <div style={{ fontWeight: 700 }}>{p.name_he || p.name_en || p.strain_id}</div>
-                <div className="small">{p.strain_id} · {p.t_category || ""}{p.c_category ? `/${p.c_category}` : ""}</div>
+                <div style={{ fontWeight: 800 }}>{p.name_he || p.name_en || p.strain_id}</div>
+                <div style={{ opacity: 0.85, fontSize: 13 }}>
+                  {p.strain_id} · {p.t_category || ""}{p.c_category ? `/${p.c_category}` : ""}
+                </div>
               </div>
-              <span className="badge">{isSel ? "נבחר" : "בחר"}</span>
+              <span style={{
+                fontWeight: 900,
+                padding: "6px 10px",
+                borderRadius: 999,
+                background: isSel ? "#fff" : "transparent",
+                color: isSel ? "#111" : "#111",
+                border: isSel ? "1px solid #fff" : "1px solid rgba(255,255,255,0.4)"
+              }}>
+                {isSel ? "נבחר" : "בחר"}
+              </span>
             </button>
           );
         })}
@@ -302,27 +233,81 @@ export default function Onboarding() {
 
       <div className="hr" />
 
-      <div className="h2">למה הזנים האלו עבדו לך? (עד 2 לכל זן)</div>
+      <div className="h2">2) למה הזנים האלו עבדו לך? (עד 2 סיבות לכל זן)</div>
       <div className="list">
         {selected.map(s => (
           <div className="card" key={s.strain_id}>
-            <div style={{ fontWeight: 800 }}>{s.name_he || s.strain_id}</div>
+            <div style={{ fontWeight: 900 }}>{s.name_he || s.strain_id}</div>
             <div className="small">{s.strain_id}</div>
 
-            <div className="row" style={{ marginTop: 10 }}>
-              {REASONS.map(r => (
-                <button
-                  key={r.k}
-                  className={"btn " + (s.reasons.includes(r.k) ? "btnPrimary" : "")}
-                  onClick={() => toggleReason(s.strain_id, r.k)}
-                >
-                  {r.t}
-                </button>
-              ))}
+            <div className="row" style={{ marginTop: 10, flexWrap: "wrap" }}>
+              {REASONS.map(r => {
+                const on = s.reasons.includes(r.k);
+                return (
+                  <button
+                    key={r.k}
+                    className="btn"
+                    style={{ ...pillBase, ...(on ? pillSelected : {}) }}
+                    onClick={() => toggleReason(s.strain_id, r.k)}
+                  >
+                    {r.t}
+                  </button>
+                );
+              })}
             </div>
           </div>
         ))}
+        {selected.length === 0 && <div className="small">בחר זנים מהרשימה למעלה ואז יופיע כאן חלק הסיבות.</div>}
       </div>
+
+      <div className="hr" />
+
+      <div className="h2">3) העדפות טעם (לבחירה מרובה)</div>
+      <div className="row" style={{ flexWrap: "wrap" }}>
+        {FLAVORS.map(f => {
+          const on = flavors.includes(f.k);
+          return (
+            <button
+              key={f.k}
+              className="btn"
+              style={{ ...pillBase, ...(on ? pillSelected : {}) }}
+              onClick={() => toggleMulti(f.k, flavors, setFlavors)}
+            >
+              {f.t}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="hr" />
+
+      <div className="h2">4) כיוון השפעה רצוי (לבחירה מרובה)</div>
+      <div className="row" style={{ flexWrap: "wrap" }}>
+        {DIRECTIONS.map(d => {
+          const on = directions.includes(d.k);
+          return (
+            <button
+              key={d.k}
+              className="btn"
+              style={{ ...pillBase, ...(on ? pillSelected : {}) }}
+              onClick={() => toggleMulti(d.k, directions, setDirections)}
+            >
+              {d.t}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="hr" />
+
+      <div className="h2">5) הערות/תוספות (מלל חופשי)</div>
+      <textarea
+        className="input"
+        style={{ minHeight: 100, paddingTop: 10 }}
+        placeholder="כל דבר שחשוב לך שנדע: מינונים, מה עוזר, מה לא, תופעות לוואי מיוחדות וכו׳…"
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+      />
 
       <div className="hr" />
 
