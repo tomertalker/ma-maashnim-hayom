@@ -35,26 +35,27 @@ const LIKE_REASONS = [
   { k: "balanced", t: "מאוזן ולא כבד" }
 ];
 
+// helper
+function splitCsv(s) {
+  return (s || "")
+    .split(",")
+    .map(x => x.trim())
+    .filter(Boolean);
+}
+
 export default function Report() {
-  const searchParams = useSearchParams();
+  const params = useSearchParams();
 
   const [session, setSession] = useState(null);
-  const [profile, setProfile] = useState(null);
 
-  const [liked, setLiked] = useState(null); // true/false
+  // selected strain
+  const [strainId, setStrainId] = useState("");
+  const [strainNameFree, setStrainNameFree] = useState(""); // for unknown strains
+  const [products, setProducts] = useState([]); // for optional autocomplete list
+  const [q, setQ] = useState(""); // search inside products list
   const [msg, setMsg] = useState("");
 
-  // ✅ בחירת זן (ללא ID ידני)
-  const [products, setProducts] = useState([]);
-  const [strainId, setStrainId] = useState("");
-  const [strainQuery, setStrainQuery] = useState("");
-  const [strainNameFree, setStrainNameFree] = useState("");
-  const [isCustomStrain, setIsCustomStrain] = useState(false);
-
-  // defaults from profile (לא חייבים להראות למשתמש)
-  const [grams, setGrams] = useState(0.3);
-  const [mix, setMix] = useState("tobacco");
-  const [goal, setGoal] = useState("calm");
+  const [liked, setLiked] = useState(null); // true/false
 
   // effects (liked)
   const [energy, setEnergy] = useState(5);
@@ -74,6 +75,7 @@ export default function Report() {
   const [sideDry, setSideDry] = useState(false);
   const [sideDizzy, setSideDizzy] = useState(false);
 
+  // common summary
   const [duration, setDuration] = useState(2);
   const [review, setReview] = useState("");
 
@@ -81,35 +83,13 @@ export default function Report() {
     supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
   }, []);
 
-  // load profile defaults
+  // If arrived from "קניתי" -> /report?strain_id=S0001
   useEffect(() => {
-    async function loadProfileAndDefaults() {
-      if (!session) return;
+    const sid = (params?.get("strain_id") || "").trim();
+    if (sid) setStrainId(sid);
+  }, [params]);
 
-      const { data, error } = await supabase
-        .from("users_profile")
-        .select("*")
-        .eq("user_id", session.user.id)
-        .single();
-
-      if (!error && data) {
-        setProfile(data);
-
-        // ברירות מחדל (אם קיימות אצלך בפרופיל)
-        if (typeof data.typical_session_grams === "number") setGrams(data.typical_session_grams);
-
-        // mix_preference: "tobacco" / "pure"
-        if (data.mix_preference) setMix(data.mix_preference);
-
-        // preferred_direction_tags לדוגמה: "calm,focus"
-        const firstGoal = (data.preferred_direction_tags || "").split(",")[0]?.trim();
-        if (firstGoal) setGoal(firstGoal);
-      }
-    }
-    loadProfileAndDefaults();
-  }, [session]);
-
-  // load products list (for searching by name)
+  // Load products list (optional: for picking strain by name instead of ID)
   useEffect(() => {
     async function loadProducts() {
       const { data, error } = await supabase
@@ -122,15 +102,17 @@ export default function Report() {
     loadProducts();
   }, []);
 
-  // if arriving from /recommendations "קניתי"
-  useEffect(() => {
-    const sid = searchParams.get("strain_id");
-    if (sid) {
-      setStrainId(sid);
-      setIsCustomStrain(false);
-      setStrainNameFree("");
-    }
-  }, [searchParams]);
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    if (!s) return products.slice(0, 7);
+    return products
+      .filter(p =>
+        (p.name_he || "").toLowerCase().includes(s) ||
+        (p.name_en || "").toLowerCase().includes(s) ||
+        (p.strain_id || "").toLowerCase().includes(s)
+      )
+      .slice(0, 7);
+  }, [q, products]);
 
   function toggle(arr, setArr, v, max = 2) {
     const has = arr.includes(v);
@@ -138,47 +120,36 @@ export default function Report() {
     setArr(next.slice(0, max));
   }
 
-  const filteredProducts = useMemo(() => {
-    const q = strainQuery.trim().toLowerCase();
-    if (!q) return [];
-    return products
-      .filter(p =>
-        (p.name_he || "").toLowerCase().includes(q) ||
-        (p.name_en || "").toLowerCase().includes(q) ||
-        (p.strain_id || "").toLowerCase().includes(q)
-      )
-      .slice(0, 25);
-  }, [strainQuery, products]);
+  function pickProduct(p) {
+    setMsg("");
+    setStrainId(p.strain_id);
+    setStrainNameFree("");
+    setQ(p.name_he || p.name_en || p.strain_id);
+  }
 
   async function submit() {
     setMsg("");
+
     if (!session) return setMsg("צריך להתחבר.");
 
+    // must have either known strain_id OR a free-text name
     if (!strainId.trim() && !strainNameFree.trim()) {
-      return setMsg("בחר זן מהרשימה או כתוב שם חופשי.");
+      return setMsg("בחר זן מהרשימה או כתוב שם זן חדש.");
     }
 
+    if (liked === null) return setMsg("בחר “אהבתי” או “לא אהבתי”.");
     if (liked === true && likeReasons.length === 0) return setMsg("בחר עד 2 סיבות למה אהבת.");
     if (liked === false && dislikeReasons.length === 0) return setMsg("בחר לפחות סיבה אחת למה לא אהבת.");
     if (liked === false && dislikeReasons.includes("bad_taste") && !tasteDetail) return setMsg("בחר מה הפריע בטעם.");
 
-    // ✅ אם זה זן מותאם אישית – נייצר ID פנימי כדי לא ליפול על NOT NULL
-    const customId =
-      "CUSTOM_" + session.user.id.slice(0, 6) + "_" + String(Date.now()).slice(-6);
-
-    const finalStrainId = isCustomStrain ? customId : strainId.trim();
-
     const payload = {
       user_id: session.user.id,
 
-      strain_id: finalStrainId,
-      strain_name_free_text: isCustomStrain ? strainNameFree.trim().slice(0, 80) : null,
-      strain_is_custom: isCustomStrain,
+      // if exists use strain_id, else null
+      strain_id: strainId.trim() ? strainId.trim() : null,
 
-      // defaults (מהפרופיל, בלי לשאול כל פעם)
-      session_grams: grams,
-      is_pure_consumption: mix,
-      session_goal_tag: goal,
+      // free text strain name if not in master
+      strain_name_free: strainId.trim() ? null : strainNameFree.trim().slice(0, 80),
 
       duration_hours: duration,
       user_short_review: review.slice(0, 150),
@@ -207,18 +178,34 @@ export default function Report() {
     if (error) return setMsg(error.message);
 
     setMsg("נשמר דיווח ✅");
-    setLiked(null);
 
+    // reset form (keep q optional)
+    setLiked(null);
     setStrainId("");
-    setStrainQuery("");
     setStrainNameFree("");
-    setIsCustomStrain(false);
+    setQ("");
+    setLikeReasons([]);
+    setDislikeReasons([]);
+    setTasteDetail("");
+    setSeverity(3);
+    setSideParanoia(false);
+    setSideDry(false);
+    setSideDizzy(false);
+    setEnergy(5);
+    setFocus(5);
+    setMood(5);
+    setAppetite(5);
+    setLibido(5);
+    setSensory(5);
+    setRelief(5);
+    setDuration(2);
+    setReview("");
   }
 
   return (
     <div className="card">
       <div className="h1">דיווח על זן</div>
-      <div className="small">בחר “אהבתי” או “לא אהבתי”. אין צורך להקליד ID – אפשר לבחור לפי שם.</div>
+      <div className="small">אפשר לבחור זן מהרשימה או לכתוב שם זן חדש.</div>
 
       {!session && <div className="small" style={{ marginTop: 10 }}>צריך להתחבר קודם.</div>}
 
@@ -232,64 +219,66 @@ export default function Report() {
 
       <div className="hr" />
 
-      <div className="h2">2) בחירת זן</div>
+      <div className="h2">2) איזה זן זה היה?</div>
 
-      {strainId && !isCustomStrain && (
+      {/* If arrived via /report?strain_id=... show it */}
+      {strainId.trim() && (
         <div className="small" style={{ marginBottom: 8 }}>
-          נבחר אוטומטית/נבחר מהרשימה: <b>{strainId}</b>
+          נבחר אוטומטית: <b>{strainId}</b> (הגעת מהמסך “קניתי”)
         </div>
       )}
 
+      {/* Search & pick from master */}
+      <div className="small" style={{ marginBottom: 6 }}>חיפוש מהרשימה (מומלץ)</div>
       <input
         className="input"
-        placeholder="חפש לפי שם (עברית/אנגלית) או ID…"
-        value={strainQuery}
-        onChange={(e) => setStrainQuery(e.target.value)}
+        placeholder="חפש לפי שם/ID…"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
       />
 
-      <div className="list" style={{ marginTop: 10, maxHeight: 220, overflowY: "auto" }}>
-        {filteredProducts.map(p => (
+      <div
+        className="list"
+        style={{
+          marginTop: 8,
+          maxHeight: 260,
+          overflowY: "auto",
+          border: "1px solid rgba(255,255,255,0.12)",
+          borderRadius: 12,
+          padding: 8
+        }}
+      >
+        {filtered.map(p => (
           <button
             key={p.strain_id}
             className="btn"
-            style={{ textAlign: "left", display: "flex", justifyContent: "space-between", gap: 12 }}
-            onClick={() => {
-              setStrainId(p.strain_id);
-              setIsCustomStrain(false);
-              setStrainNameFree("");
-            }}
+            style={{ textAlign: "left", display: "flex", justifyContent: "space-between" }}
+            onClick={() => pickProduct(p)}
           >
             <div>
-              <div style={{ fontWeight: 800 }}>{p.name_he || p.name_en || p.strain_id}</div>
+              <div style={{ fontWeight: 700 }}>{p.name_he || p.name_en || p.strain_id}</div>
               <div className="small">{p.strain_id}</div>
             </div>
-            <span className="badge">בחר</span>
+            <span className="badge">{strainId === p.strain_id ? "נבחר" : "בחר"}</span>
           </button>
         ))}
-
-        {strainQuery.trim() && filteredProducts.length === 0 && (
-          <div className="small" style={{ padding: 10 }}>
-            לא נמצאו תוצאות לחיפוש הזה.
-          </div>
-        )}
+        {filtered.length === 0 && <div className="small">לא נמצאו תוצאות.</div>}
       </div>
 
       <div className="hr" />
 
-      <div className="h2">לא מצאת? דווח לפי שם (מותאם אישית)</div>
+      {/* Free text if not in system */}
+      <div className="h2">או: זן חדש שלא מופיע במערכת</div>
+      <div className="small">אם לא מצאת ברשימה, כתוב שם חופשי (ואתה תעדכן את המערכת אחר כך ידנית).</div>
       <input
         className="input"
-        placeholder="כתוב שם זן חופשי…"
+        placeholder="שם הזן (למשל: Blue Dream)"
         value={strainNameFree}
         onChange={(e) => {
           setStrainNameFree(e.target.value);
-          setIsCustomStrain(true);
-          setStrainId("");
+          if (e.target.value.trim()) setStrainId(""); // if free name chosen, clear id
         }}
       />
-      <div className="small" style={{ marginTop: 6 }}>
-        נשמור את זה כזן “מותאם אישית” כדי שתוכל להוסיף אותו ל־inventory מאוחר יותר.
-      </div>
 
       {liked === true && (
         <>
@@ -372,15 +361,9 @@ export default function Report() {
           <div className="hr" />
           <div className="h2">תופעות לוואי (אופציונלי)</div>
           <div className="row">
-            <label className="small">
-              <input type="checkbox" checked={sideParanoia} onChange={(e) => setSideParanoia(e.target.checked)} /> פרנויה
-            </label>
-            <label className="small">
-              <input type="checkbox" checked={sideDry} onChange={(e) => setSideDry(e.target.checked)} /> יובש
-            </label>
-            <label className="small">
-              <input type="checkbox" checked={sideDizzy} onChange={(e) => setSideDizzy(e.target.checked)} /> סחרחורת
-            </label>
+            <label className="small"><input type="checkbox" checked={sideParanoia} onChange={(e) => setSideParanoia(e.target.checked)} /> פרנויה</label>
+            <label className="small"><input type="checkbox" checked={sideDry} onChange={(e) => setSideDry(e.target.checked)} /> יובש</label>
+            <label className="small"><input type="checkbox" checked={sideDizzy} onChange={(e) => setSideDizzy(e.target.checked)} /> סחרחורת</label>
           </div>
         </>
       )}
