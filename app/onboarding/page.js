@@ -12,6 +12,25 @@ const REASONS = [
   { k: "taste_aroma", t: "טעם/ארומה" }
 ];
 
+const GOALS = [
+  { k: "sleep", t: "שינה" },
+  { k: "calm", t: "רוגע/חרדה" },
+  { k: "pain_body", t: "כאב" },
+  { k: "focus", t: "פוקוס/תפקוד" },
+  { k: "mood", t: "מצב רוח" },
+  { k: "appetite", t: "תיאבון" },
+  { k: "social", t: "חברתי" },
+  { k: "creativity", t: "יצירתיות" }
+];
+
+const AVOID = [
+  { k: "avoid_anxiety", t: "להימנע מחרדה/לחץ" },
+  { k: "avoid_sedation", t: "להימנע מהרדמה חזקה" },
+  { k: "avoid_stimulation", t: "להימנע מהתעוררות/דופק" },
+  { k: "avoid_munchies", t: "להימנע ממאנצ'יז חזק" },
+  { k: "avoid_confusing_head", t: "להימנע מבלבול/כבד בראש" }
+];
+
 const FLAVORS = [
   { k: "citrus", t: "הדרי" },
   { k: "pine", t: "אורן" },
@@ -20,16 +39,6 @@ const FLAVORS = [
   { k: "floral", t: "פרחוני" },
   { k: "spicy", t: "חריף/פלפלי" },
   { k: "sweet", t: "מתוק" }
-];
-
-const DIRECTIONS = [
-  { k: "sleep", t: "שינה" },
-  { k: "calm", t: "רוגע" },
-  { k: "mood", t: "מצב רוח" },
-  { k: "focus", t: "פוקוס" },
-  { k: "pain_body", t: "כאב גוף" },
-  { k: "social", t: "חברתי" },
-  { k: "creativity", t: "יצירתיות" }
 ];
 
 function splitCsv(s) {
@@ -48,25 +57,44 @@ export default function Onboarding() {
   const [msg, setMsg] = useState("");
 
   const [profile, setProfile] = useState({
+    // פרטים בסיסיים
     consent_given: true,
+    patient_display_name: "",
+    patient_age_band: "under_18",
+    patient_sex: "",
+
+    // מצב רפואי / רקע קצר
     condition_1: "pain",
     condition_2: "",
+    patient_background_notes: "",
+
+    // מטרות טיפול + סימפטומים
+    treatment_goals: "calm,sleep",
+    symptom_pain_0_10: 5,
+    symptom_anxiety_0_10: 5,
+    symptom_sleep_0_10: 5,
+    symptom_focus_0_10: 5,
+
+    avoid_effects: "avoid_anxiety",
+
+    // הרגלי שימוש
     preferred_method: "smoke",
     mix_preference: "tobacco",
     daily_start_time: "morning",
     typical_session_grams: 0.3,
     sessions_per_day_band: "1_2",
     experience_level: "intermediate",
+
+    // טעם/כיוון (כמו שהיה)
     preferred_flavor_tags: "citrus,pine",
-    citrus_preference: "bitter_grapefruit",
     earthy_tolerance: "avoid_strong",
     preferred_direction_tags: "calm,focus",
 
-    // new fields
-    default_goal_tag: "calm",
-    onboarding_notes: "",
+    // נעילה
     onboarding_locked: false,
-    onboarding_completed_at: null
+    onboarding_completed_at: null,
+    default_goal_tag: "calm",
+    onboarding_notes: ""
   });
 
   // session
@@ -74,20 +102,7 @@ export default function Onboarding() {
     supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
   }, []);
 
-  // load products
-  useEffect(() => {
-    async function loadProducts() {
-      const { data, error } = await supabase
-        .from("products_master")
-        .select("strain_id,name_he,name_en,t_category,c_category")
-        .order("internal_product_id", { ascending: true });
-
-      if (!error) setProducts(data || []);
-    }
-    loadProducts();
-  }, []);
-
-  // load existing profile (and lock check)
+  // load existing profile (if exists)
   useEffect(() => {
     async function loadProfile() {
       if (!session) return;
@@ -103,12 +118,24 @@ export default function Onboarding() {
           window.location.href = "/recommendations";
           return;
         }
-        // merge existing into state
         setProfile(prev => ({ ...prev, ...data }));
       }
     }
     loadProfile();
   }, [session]);
+
+  // load products
+  useEffect(() => {
+    async function loadProducts() {
+      const { data, error } = await supabase
+        .from("products_master")
+        .select("strain_id,name_he,name_en,t_category,c_category")
+        .order("internal_product_id", { ascending: true });
+
+      if (!error) setProducts(data || []);
+    }
+    loadProducts();
+  }, []);
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -121,6 +148,14 @@ export default function Onboarding() {
       )
       .slice(0, 200);
   }, [q, products]);
+
+  function toggleCsvField(field, key, max = 6) {
+    const cur = splitCsv(profile[field]);
+    const has = cur.includes(key);
+    let next = has ? cur.filter(x => x !== key) : [...cur, key];
+    if (next.length > max) next = next.slice(0, max);
+    setProfile(prev => ({ ...prev, [field]: joinCsv(next) }));
+  }
 
   function toggleSelect(p) {
     setMsg("");
@@ -142,21 +177,15 @@ export default function Onboarding() {
     }));
   }
 
-  function toggleCsvField(field, key, max = 5) {
-    const cur = splitCsv(profile[field]);
-    const has = cur.includes(key);
-    let next = has ? cur.filter(x => x !== key) : [...cur, key];
-    if (next.length > max) next = next.slice(0, max);
-    setProfile(prev => ({ ...prev, [field]: joinCsv(next) }));
-  }
-
   async function saveStep1() {
     setMsg("");
     if (!session) return setMsg("צריך להתחבר קודם.");
 
-    // חובה לבחור לפחות כיוון אחד
-    if (splitCsv(profile.preferred_direction_tags).length === 0) {
-      return setMsg("בחר לפחות כיוון אחד (למשל רוגע/שינה/פוקוס).");
+    if (!profile.patient_display_name.trim()) {
+      return setMsg("מלא שם תצוגה/כינוי למטופל.");
+    }
+    if (splitCsv(profile.treatment_goals).length === 0) {
+      return setMsg("בחר לפחות מטרה אחת לטיפול.");
     }
 
     const payload = {
@@ -201,17 +230,107 @@ export default function Onboarding() {
       <div className="h1">שאלון היכרות</div>
       <div className="small">
         {step === 1
-          ? "שלב 1: ממלאים פרופיל משתמש (פעם אחת בלבד)."
-          : "שלב 2: בוחרים זנים שעבדו לך (מינימום 3, ללא הגבלה)."}
+          ? "שלב 1: פרטי מטופל + מטרות טיפול + הרגלים (ממלאים פעם אחת בלבד)."
+          : "שלב 2: בוחרים זנים שעבדו (מינימום 3, ללא הגבלה)."}
       </div>
 
       {msg && <div className="small" style={{ marginTop: 10 }}>{msg}</div>}
-
       <div className="hr" />
 
       {step === 1 && (
         <>
-          <div className="h2">ברירות מחדל לסשן</div>
+          <div className="h2">פרטי מטופל</div>
+          <div className="row">
+            <input
+              className="input"
+              placeholder="שם תצוגה / כינוי"
+              value={profile.patient_display_name}
+              onChange={(e) => setProfile(prev => ({ ...prev, patient_display_name: e.target.value }))}
+            />
+            <select
+              className="input"
+              value={profile.patient_age_band}
+              onChange={(e) => setProfile(prev => ({ ...prev, patient_age_band: e.target.value }))}
+            >
+              <option value="under_18">מתחת ל־18</option>
+              <option value="18_24">18–24</option>
+              <option value="25_34">25–34</option>
+              <option value="35_44">35–44</option>
+              <option value="45_plus">45+</option>
+            </select>
+            <select
+              className="input"
+              value={profile.patient_sex || ""}
+              onChange={(e) => setProfile(prev => ({ ...prev, patient_sex: e.target.value }))}
+            >
+              <option value="">מין (אופציונלי)</option>
+              <option value="female">נקבה</option>
+              <option value="male">זכר</option>
+              <option value="other">אחר</option>
+              <option value="prefer_not">מעדיף לא לציין</option>
+            </select>
+          </div>
+
+          <div className="hr" />
+          <div className="h2">מטרות טיפול (בחר כמה שמתאים)</div>
+          <div className="row">
+            {GOALS.map(g => {
+              const active = splitCsv(profile.treatment_goals).includes(g.k);
+              return (
+                <button
+                  key={g.k}
+                  className={"btn " + (active ? "btnPrimary" : "")}
+                  onClick={() => toggleCsvField("treatment_goals", g.k, 6)}
+                  style={{ color: active ? undefined : "#111" }}
+                >
+                  {g.t}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="hr" />
+          <div className="h2">חומרת סימפטומים (0–10)</div>
+
+          {[
+            ["כאב", "symptom_pain_0_10"],
+            ["חרדה/לחץ", "symptom_anxiety_0_10"],
+            ["בעיות שינה", "symptom_sleep_0_10"],
+            ["קושי בפוקוס", "symptom_focus_0_10"]
+          ].map(([label, key]) => (
+            <div key={key} style={{ marginBottom: 10 }}>
+              <div className="small">{label}: {profile[key]}</div>
+              <input
+                className="input"
+                type="range"
+                min="0"
+                max="10"
+                value={profile[key]}
+                onChange={(e) => setProfile(prev => ({ ...prev, [key]: Number(e.target.value) }))}
+              />
+            </div>
+          ))}
+
+          <div className="hr" />
+          <div className="h2">מה חשוב להימנע (אופציונלי)</div>
+          <div className="row">
+            {AVOID.map(a => {
+              const active = splitCsv(profile.avoid_effects).includes(a.k);
+              return (
+                <button
+                  key={a.k}
+                  className={"btn " + (active ? "btnPrimary" : "")}
+                  onClick={() => toggleCsvField("avoid_effects", a.k, 6)}
+                  style={{ color: active ? undefined : "#111" }}
+                >
+                  {a.t}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="hr" />
+          <div className="h2">הרגלי שימוש (ברירת מחדל לדיווחים)</div>
           <div className="row">
             <select
               className="input"
@@ -232,16 +351,28 @@ export default function Onboarding() {
 
             <select
               className="input"
-              value={profile.default_goal_tag}
-              onChange={(e) => setProfile(prev => ({ ...prev, default_goal_tag: e.target.value }))}
+              value={profile.daily_start_time}
+              onChange={(e) => setProfile(prev => ({ ...prev, daily_start_time: e.target.value }))}
             >
-              {DIRECTIONS.map(d => <option key={d.k} value={d.k}>{d.t}</option>)}
+              <option value="morning">בוקר</option>
+              <option value="noon">צהריים</option>
+              <option value="evening">ערב</option>
+              <option value="night">לילה</option>
+            </select>
+
+            <select
+              className="input"
+              value={profile.sessions_per_day_band}
+              onChange={(e) => setProfile(prev => ({ ...prev, sessions_per_day_band: e.target.value }))}
+            >
+              <option value="1_2">1–2 ביום</option>
+              <option value="3_4">3–4 ביום</option>
+              <option value="5_plus">5+ ביום</option>
             </select>
           </div>
-          <div className="small">הערה: הערכים האלה ישמשו כברירת מחדל בדיווח על זן.</div>
 
           <div className="hr" />
-          <div className="h2">בחירת טעמים מועדפים (עד 5)</div>
+          <div className="h2">טעמים מועדפים (עד 6)</div>
           <div className="row">
             {FLAVORS.map(f => {
               const active = splitCsv(profile.preferred_flavor_tags).includes(f.k);
@@ -249,7 +380,7 @@ export default function Onboarding() {
                 <button
                   key={f.k}
                   className={"btn " + (active ? "btnPrimary" : "")}
-                  onClick={() => toggleCsvField("preferred_flavor_tags", f.k, 5)}
+                  onClick={() => toggleCsvField("preferred_flavor_tags", f.k, 6)}
                   style={{ color: active ? undefined : "#111" }}
                 >
                   {f.t}
@@ -261,7 +392,7 @@ export default function Onboarding() {
           <div className="hr" />
           <div className="h2">כיוונים מועדפים (עד 3)</div>
           <div className="row">
-            {DIRECTIONS.map(d => {
+            {GOALS.map(d => {
               const active = splitCsv(profile.preferred_direction_tags).includes(d.k);
               return (
                 <button
@@ -281,9 +412,9 @@ export default function Onboarding() {
           <textarea
             className="input"
             rows={4}
-            placeholder="כל דבר שחשוב שנדע…"
-            value={profile.onboarding_notes || ""}
-            onChange={(e) => setProfile(prev => ({ ...prev, onboarding_notes: e.target.value }))}
+            placeholder="רקע חשוב, מטרות ספציפיות, משהו שנרצה לנתח בהמשך…"
+            value={profile.patient_background_notes || ""}
+            onChange={(e) => setProfile(prev => ({ ...prev, patient_background_notes: e.target.value }))}
           />
 
           <div className="hr" />
@@ -296,13 +427,12 @@ export default function Onboarding() {
 
       {step === 2 && (
         <>
-          <div className="h2">בחירת זנים (Seeds)</div>
-          <div className="small">בחר כמה שאתה רוצה. חובה לבחור לפחות 3. לכל זן בוחרים סיבה אחת לפחות.</div>
+          <div className="h2">בחירת זנים שעבדו (Seeds)</div>
+          <div className="small">מינימום 3. ללא מקסימום. לכל זן בוחרים סיבה אחת לפחות.</div>
 
           <div className="hr" />
           <input className="input" placeholder="חיפוש לפי שם/ID…" value={q} onChange={(e) => setQ(e.target.value)} />
 
-          {/* list box scroll */}
           <div
             className="list"
             style={{
@@ -336,7 +466,6 @@ export default function Onboarding() {
                     </div>
                   </div>
 
-                  {/* badge fix: black text */}
                   <span
                     className="badge"
                     style={{
@@ -354,7 +483,6 @@ export default function Onboarding() {
           </div>
 
           <div className="hr" />
-
           <div className="h2">סיבות (עד 2 לכל זן)</div>
           <div className="list">
             {selected.map(s => (
@@ -381,7 +509,7 @@ export default function Onboarding() {
           <div className="hr" />
           <div className="row">
             <button className="btn btnPrimary" onClick={finishOnboarding}>סיום ושמירה</button>
-            <button className="btn" onClick={() => setStep(1)}>חזרה לשלב היכרות</button>
+            <button className="btn" onClick={() => setStep(1)}>חזרה לשאלון</button>
           </div>
         </>
       )}
