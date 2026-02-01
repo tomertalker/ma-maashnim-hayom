@@ -23,6 +23,17 @@ const GOALS = [
   { k: "creativity", t: "יצירתיות" }
 ];
 
+const INDICATIONS = [
+  { k: "chronic_pain", t: "כאב כרוני" },
+  { k: "sleep_issues", t: "בעיות שינה" },
+  { k: "anxiety", t: "חרדה/סטרס" },
+  { k: "ptsd", t: "PTSD" },
+  { k: "adhd_focus", t: "קשב/פוקוס" },
+  { k: "appetite", t: "תיאבון" },
+  { k: "muscle_spasm", t: "ספאזם/שרירים" },
+  { k: "other", t: "אחר" }
+];
+
 const AVOID = [
   { k: "avoid_anxiety", t: "להימנע מחרדה/לחץ" },
   { k: "avoid_sedation", t: "להימנע מהרדמה חזקה" },
@@ -52,23 +63,23 @@ export default function Onboarding() {
   const [session, setSession] = useState(null);
   const [products, setProducts] = useState([]);
   const [q, setQ] = useState("");
-  const [selected, setSelected] = useState([]); // [{strain_id, name_he, reasons:[]}]
-  const [step, setStep] = useState(1); // 1=profile, 2=seeds
+  const [selected, setSelected] = useState([]);
+  const [step, setStep] = useState(1);
   const [msg, setMsg] = useState("");
 
   const [profile, setProfile] = useState({
-    // פרטים בסיסיים
     consent_given: true,
+
+    // בסיסי (18+ בלבד)
     patient_display_name: "",
-    patient_age_band: "under_18",
+    patient_age_band: "18_24",
     patient_sex: "",
 
-    // מצב רפואי / רקע קצר
-    condition_1: "pain",
-    condition_2: "",
-    patient_background_notes: "",
+    // התווייה טיפולית (חדש)
+    therapeutic_indication_tags: "sleep_issues,anxiety",
+    therapeutic_indication_free_text: "",
 
-    // מטרות טיפול + סימפטומים
+    // מטרות + סימפטומים
     treatment_goals: "calm,sleep",
     symptom_pain_0_10: 5,
     symptom_anxiety_0_10: 5,
@@ -77,7 +88,7 @@ export default function Onboarding() {
 
     avoid_effects: "avoid_anxiety",
 
-    // הרגלי שימוש
+    // הרגלי שימוש (כבר היה)
     preferred_method: "smoke",
     mix_preference: "tobacco",
     daily_start_time: "morning",
@@ -85,7 +96,7 @@ export default function Onboarding() {
     sessions_per_day_band: "1_2",
     experience_level: "intermediate",
 
-    // טעם/כיוון (כמו שהיה)
+    // טעם/כיוון
     preferred_flavor_tags: "citrus,pine",
     earthy_tolerance: "avoid_strong",
     preferred_direction_tags: "calm,focus",
@@ -97,12 +108,10 @@ export default function Onboarding() {
     onboarding_notes: ""
   });
 
-  // session
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
   }, []);
 
-  // load existing profile (if exists)
   useEffect(() => {
     async function loadProfile() {
       if (!session) return;
@@ -124,7 +133,6 @@ export default function Onboarding() {
     loadProfile();
   }, [session]);
 
-  // load products
   useEffect(() => {
     async function loadProducts() {
       const { data, error } = await supabase
@@ -180,13 +188,9 @@ export default function Onboarding() {
   async function saveStep1() {
     setMsg("");
     if (!session) return setMsg("צריך להתחבר קודם.");
-
-    if (!profile.patient_display_name.trim()) {
-      return setMsg("מלא שם תצוגה/כינוי למטופל.");
-    }
-    if (splitCsv(profile.treatment_goals).length === 0) {
-      return setMsg("בחר לפחות מטרה אחת לטיפול.");
-    }
+    if (!profile.patient_display_name.trim()) return setMsg("מלא שם תצוגה/כינוי.");
+    if (splitCsv(profile.therapeutic_indication_tags).length === 0) return setMsg("בחר לפחות התוויה טיפולית אחת.");
+    if (splitCsv(profile.treatment_goals).length === 0) return setMsg("בחר לפחות מטרה אחת.");
 
     const payload = {
       user_id: session.user.id,
@@ -198,7 +202,7 @@ export default function Onboarding() {
     const { error } = await supabase.from("users_profile").upsert(payload);
     if (error) return setMsg(error.message);
 
-    setMsg("נשמר שלב היכרות ✅ עכשיו בוחרים זנים שעבדו.");
+    setMsg("נשמר ✅ עוברים לבחירת זנים שעבדו.");
     setStep(2);
   }
 
@@ -206,7 +210,6 @@ export default function Onboarding() {
     setMsg("");
     if (!session) return setMsg("צריך להתחבר קודם.");
     if (selected.length < 3) return setMsg("בחר לפחות 3 זנים שעבדו לך.");
-
     const missingReason = selected.find(s => s.reasons.length === 0);
     if (missingReason) return setMsg(`בחר סיבה אחת לפחות עבור: ${missingReason.name_he || missingReason.strain_id}`);
 
@@ -214,7 +217,6 @@ export default function Onboarding() {
       user_id: session.user.id,
       ...profile,
       liked_strains: selected.map(s => ({ strain_id: s.strain_id, reasons: s.reasons })),
-
       onboarding_locked: true,
       onboarding_completed_at: new Date().toISOString()
     };
@@ -230,8 +232,8 @@ export default function Onboarding() {
       <div className="h1">שאלון היכרות</div>
       <div className="small">
         {step === 1
-          ? "שלב 1: פרטי מטופל + מטרות טיפול + הרגלים (ממלאים פעם אחת בלבד)."
-          : "שלב 2: בוחרים זנים שעבדו (מינימום 3, ללא הגבלה)."}
+          ? "שלב 1: פרטי משתמש + התוויה טיפולית + מטרות והעדפות (ממלאים פעם אחת בלבד)."
+          : "שלב 2: זנים שעבדו (מינימום 3, ללא מקסימום)."}
       </div>
 
       {msg && <div className="small" style={{ marginTop: 10 }}>{msg}</div>}
@@ -239,7 +241,7 @@ export default function Onboarding() {
 
       {step === 1 && (
         <>
-          <div className="h2">פרטי מטופל</div>
+          <div className="h2">פרטי משתמש (18+ בלבד)</div>
           <div className="row">
             <input
               className="input"
@@ -252,7 +254,6 @@ export default function Onboarding() {
               value={profile.patient_age_band}
               onChange={(e) => setProfile(prev => ({ ...prev, patient_age_band: e.target.value }))}
             >
-              <option value="under_18">מתחת ל־18</option>
               <option value="18_24">18–24</option>
               <option value="25_34">25–34</option>
               <option value="35_44">35–44</option>
@@ -272,7 +273,34 @@ export default function Onboarding() {
           </div>
 
           <div className="hr" />
-          <div className="h2">מטרות טיפול (בחר כמה שמתאים)</div>
+          <div className="h2">התווייה טיפולית (לאיזה צרכים משתמש)</div>
+          <div className="row">
+            {INDICATIONS.map(x => {
+              const active = splitCsv(profile.therapeutic_indication_tags).includes(x.k);
+              return (
+                <button
+                  key={x.k}
+                  className={"btn " + (active ? "btnPrimary" : "")}
+                  onClick={() => toggleCsvField("therapeutic_indication_tags", x.k, 6)}
+                >
+                  {x.t}
+                </button>
+              );
+            })}
+          </div>
+
+          <div style={{ marginTop: 10 }}>
+            <textarea
+              className="input"
+              rows={3}
+              placeholder="אם 'אחר' – כתוב כאן בקצרה (אופציונלי)"
+              value={profile.therapeutic_indication_free_text || ""}
+              onChange={(e) => setProfile(prev => ({ ...prev, therapeutic_indication_free_text: e.target.value }))}
+            />
+          </div>
+
+          <div className="hr" />
+          <div className="h2">מטרות טיפול (בחר כמה)</div>
           <div className="row">
             {GOALS.map(g => {
               const active = splitCsv(profile.treatment_goals).includes(g.k);
@@ -281,7 +309,6 @@ export default function Onboarding() {
                   key={g.k}
                   className={"btn " + (active ? "btnPrimary" : "")}
                   onClick={() => toggleCsvField("treatment_goals", g.k, 6)}
-                  style={{ color: active ? undefined : "#111" }}
                 >
                   {g.t}
                 </button>
@@ -291,7 +318,6 @@ export default function Onboarding() {
 
           <div className="hr" />
           <div className="h2">חומרת סימפטומים (0–10)</div>
-
           {[
             ["כאב", "symptom_pain_0_10"],
             ["חרדה/לחץ", "symptom_anxiety_0_10"],
@@ -321,54 +347,11 @@ export default function Onboarding() {
                   key={a.k}
                   className={"btn " + (active ? "btnPrimary" : "")}
                   onClick={() => toggleCsvField("avoid_effects", a.k, 6)}
-                  style={{ color: active ? undefined : "#111" }}
                 >
                   {a.t}
                 </button>
               );
             })}
-          </div>
-
-          <div className="hr" />
-          <div className="h2">הרגלי שימוש (ברירת מחדל לדיווחים)</div>
-          <div className="row">
-            <select
-              className="input"
-              value={profile.mix_preference}
-              onChange={(e) => setProfile(prev => ({ ...prev, mix_preference: e.target.value }))}
-            >
-              <option value="pure">נקי</option>
-              <option value="tobacco">עם טבק</option>
-            </select>
-
-            <input
-              className="input"
-              type="number"
-              step="0.05"
-              value={profile.typical_session_grams}
-              onChange={(e) => setProfile(prev => ({ ...prev, typical_session_grams: Number(e.target.value) }))}
-            />
-
-            <select
-              className="input"
-              value={profile.daily_start_time}
-              onChange={(e) => setProfile(prev => ({ ...prev, daily_start_time: e.target.value }))}
-            >
-              <option value="morning">בוקר</option>
-              <option value="noon">צהריים</option>
-              <option value="evening">ערב</option>
-              <option value="night">לילה</option>
-            </select>
-
-            <select
-              className="input"
-              value={profile.sessions_per_day_band}
-              onChange={(e) => setProfile(prev => ({ ...prev, sessions_per_day_band: e.target.value }))}
-            >
-              <option value="1_2">1–2 ביום</option>
-              <option value="3_4">3–4 ביום</option>
-              <option value="5_plus">5+ ביום</option>
-            </select>
           </div>
 
           <div className="hr" />
@@ -381,7 +364,6 @@ export default function Onboarding() {
                   key={f.k}
                   className={"btn " + (active ? "btnPrimary" : "")}
                   onClick={() => toggleCsvField("preferred_flavor_tags", f.k, 6)}
-                  style={{ color: active ? undefined : "#111" }}
                 >
                   {f.t}
                 </button>
@@ -399,23 +381,12 @@ export default function Onboarding() {
                   key={d.k}
                   className={"btn " + (active ? "btnPrimary" : "")}
                   onClick={() => toggleCsvField("preferred_direction_tags", d.k, 3)}
-                  style={{ color: active ? undefined : "#111" }}
                 >
                   {d.t}
                 </button>
               );
             })}
           </div>
-
-          <div className="hr" />
-          <div className="h2">הערות חופשי</div>
-          <textarea
-            className="input"
-            rows={4}
-            placeholder="רקע חשוב, מטרות ספציפיות, משהו שנרצה לנתח בהמשך…"
-            value={profile.patient_background_notes || ""}
-            onChange={(e) => setProfile(prev => ({ ...prev, patient_background_notes: e.target.value }))}
-          />
 
           <div className="hr" />
           <div className="row">
@@ -428,55 +399,28 @@ export default function Onboarding() {
       {step === 2 && (
         <>
           <div className="h2">בחירת זנים שעבדו (Seeds)</div>
-          <div className="small">מינימום 3. ללא מקסימום. לכל זן בוחרים סיבה אחת לפחות.</div>
+          <div className="small">מינימום 3. ללא הגבלה. לכל זן בוחרים סיבה אחת לפחות.</div>
 
           <div className="hr" />
           <input className="input" placeholder="חיפוש לפי שם/ID…" value={q} onChange={(e) => setQ(e.target.value)} />
 
-          <div
-            className="list"
-            style={{
-              marginTop: 10,
-              maxHeight: 320,
-              overflowY: "auto",
-              paddingRight: 6
-            }}
-          >
+          <div className="list" style={{ marginTop: 10, maxHeight: 320, overflowY: "auto", paddingRight: 6 }}>
             {filtered.map(p => {
               const isSel = !!selected.find(x => x.strain_id === p.strain_id);
               return (
                 <button
                   key={p.strain_id}
                   className="btn"
-                  style={{
-                    textAlign: "left",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    gap: 12
-                  }}
+                  style={{ textAlign: "left", display: "flex", justifyContent: "space-between", gap: 12 }}
                   onClick={() => toggleSelect(p)}
                 >
                   <div>
-                    <div style={{ fontWeight: 700, color: "#111" }}>
-                      {p.name_he || p.name_en || p.strain_id}
-                    </div>
+                    <div style={{ fontWeight: 800, color: "#111" }}>{p.name_he || p.name_en || p.strain_id}</div>
                     <div className="small" style={{ color: "#333" }}>
                       {p.strain_id} · {p.t_category || ""}{p.c_category ? `/${p.c_category}` : ""}
                     </div>
                   </div>
-
-                  <span
-                    className="badge"
-                    style={{
-                      background: isSel ? "rgba(0,0,0,0.08)" : "rgba(0,0,0,0.04)",
-                      color: "#111",
-                      padding: "6px 10px",
-                      borderRadius: 999
-                    }}
-                  >
-                    {isSel ? "נבחר" : "בחר"}
-                  </span>
+                  <span className="badge">{isSel ? "נבחר" : "בחר"}</span>
                 </button>
               );
             })}
@@ -487,8 +431,8 @@ export default function Onboarding() {
           <div className="list">
             {selected.map(s => (
               <div className="card" key={s.strain_id}>
-                <div style={{ fontWeight: 800 }}>{s.name_he || s.strain_id}</div>
-                <div className="small">{s.strain_id}</div>
+                <div style={{ fontWeight: 900, color: "#111" }}>{s.name_he || s.strain_id}</div>
+                <div className="small" style={{ color: "#333" }}>{s.strain_id}</div>
 
                 <div className="row" style={{ marginTop: 10 }}>
                   {REASONS.map(r => (
@@ -496,7 +440,6 @@ export default function Onboarding() {
                       key={r.k}
                       className={"btn " + (s.reasons.includes(r.k) ? "btnPrimary" : "")}
                       onClick={() => toggleReason(s.strain_id, r.k)}
-                      style={{ color: s.reasons.includes(r.k) ? undefined : "#111" }}
                     >
                       {r.t}
                     </button>
@@ -509,7 +452,7 @@ export default function Onboarding() {
           <div className="hr" />
           <div className="row">
             <button className="btn btnPrimary" onClick={finishOnboarding}>סיום ושמירה</button>
-            <button className="btn" onClick={() => setStep(1)}>חזרה לשאלון</button>
+            <button className="btn" onClick={() => setStep(1)}>חזרה</button>
           </div>
         </>
       )}
