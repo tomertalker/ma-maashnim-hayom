@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
 
 function splitCsv(s) {
@@ -35,6 +36,8 @@ function scoreGenetic(product, seedParentsSet) {
 }
 
 export default function Recommendations() {
+  const router = useRouter();
+
   const [tab, setTab] = useState("personal");
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
@@ -93,7 +96,7 @@ export default function Recommendations() {
       .map(p => {
         const g = scoreGenetic(p, seedParentsSet);
         const t = scoreTaste(p.terpenes, flavorTags);
-        // penalty for earthy if user avoids strong + product has myrcene/humulene
+
         const earthyPenalty =
           earthyTol === "avoid_strong" && splitCsv(p.terpenes).some(x => ["myrcene", "humulene"].includes(x))
             ? 0.6
@@ -113,7 +116,6 @@ export default function Recommendations() {
     async function loadSimilar() {
       if (!session || !profile) return;
 
-      // find similar profiles by strict keys (mix + start time)
       const { data: similars } = await supabase
         .from("users_profile")
         .select("user_id,mix_preference,daily_start_time")
@@ -128,15 +130,13 @@ export default function Recommendations() {
         return;
       }
 
-      // fetch liked reports from those users
       const { data: reps } = await supabase
         .from("reports")
         .select("user_id,strain_id,relief_score")
         .in("user_id", ids)
         .eq("liked_flag", true);
 
-      // aggregate
-      const map = new Map(); // strain_id -> {count, avgRelief}
+      const map = new Map();
       for (const r of (reps || [])) {
         const cur = map.get(r.strain_id) || { count: 0, sum: 0 };
         cur.count += 1;
@@ -158,12 +158,16 @@ export default function Recommendations() {
   async function markPurchase(p) {
     setMsg("");
     if (!session) return setMsg("צריך להתחבר.");
+
     const { error } = await supabase.from("purchases").insert({
       user_id: session.user.id,
       strain_id: p.strain_id
     });
+
     if (error) return setMsg(error.message);
-    setMsg("סומן כ'קניתי'. עכשיו אפשר לדווח.");
+
+    // ✅ אחרי "קניתי" עוברים ישר לדיווח על אותו זן
+    router.push(`/report?strain_id=${encodeURIComponent(p.strain_id)}`);
   }
 
   return (
