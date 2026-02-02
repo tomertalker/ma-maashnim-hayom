@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
 
 const DISLIKE_REASONS = [
@@ -35,24 +34,14 @@ const LIKE_REASONS = [
   { k: "balanced", t: "מאוזן ולא כבד" }
 ];
 
-// helper
-function splitCsv(s) {
-  return (s || "")
-    .split(",")
-    .map(x => x.trim())
-    .filter(Boolean);
-}
-
 export default function Report() {
-  const params = useSearchParams();
-
   const [session, setSession] = useState(null);
 
   // selected strain
   const [strainId, setStrainId] = useState("");
-  const [strainNameFree, setStrainNameFree] = useState(""); // for unknown strains
-  const [products, setProducts] = useState([]); // for optional autocomplete list
-  const [q, setQ] = useState(""); // search inside products list
+  const [strainNameFree, setStrainNameFree] = useState(""); // unknown strain name
+  const [products, setProducts] = useState([]); // for pick list
+  const [q, setQ] = useState(""); // search query
   const [msg, setMsg] = useState("");
 
   const [liked, setLiked] = useState(null); // true/false
@@ -83,13 +72,19 @@ export default function Report() {
     supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
   }, []);
 
-  // If arrived from "קניתי" -> /report?strain_id=S0001
+  // ✅ No useSearchParams: read query ONLY in browser
   useEffect(() => {
-    const sid = (params?.get("strain_id") || "").trim();
-    if (sid) setStrainId(sid);
-  }, [params]);
+    try {
+      if (typeof window === "undefined") return;
+      const sp = new URLSearchParams(window.location.search);
+      const sid = (sp.get("strain_id") || "").trim();
+      if (sid) setStrainId(sid);
+    } catch (e) {
+      // ignore
+    }
+  }, []);
 
-  // Load products list (optional: for picking strain by name instead of ID)
+  // load products (for picking by name)
   useEffect(() => {
     async function loadProducts() {
       const { data, error } = await supabase
@@ -131,8 +126,6 @@ export default function Report() {
     setMsg("");
 
     if (!session) return setMsg("צריך להתחבר.");
-
-    // must have either known strain_id OR a free-text name
     if (!strainId.trim() && !strainNameFree.trim()) {
       return setMsg("בחר זן מהרשימה או כתוב שם זן חדש.");
     }
@@ -145,10 +138,10 @@ export default function Report() {
     const payload = {
       user_id: session.user.id,
 
-      // if exists use strain_id, else null
+      // known id or null
       strain_id: strainId.trim() ? strainId.trim() : null,
 
-      // free text strain name if not in master
+      // free-text if unknown (requires column in DB)
       strain_name_free: strainId.trim() ? null : strainNameFree.trim().slice(0, 80),
 
       duration_hours: duration,
@@ -179,7 +172,7 @@ export default function Report() {
 
     setMsg("נשמר דיווח ✅");
 
-    // reset form (keep q optional)
+    // reset
     setLiked(null);
     setStrainId("");
     setStrainNameFree("");
@@ -221,14 +214,12 @@ export default function Report() {
 
       <div className="h2">2) איזה זן זה היה?</div>
 
-      {/* If arrived via /report?strain_id=... show it */}
       {strainId.trim() && (
         <div className="small" style={{ marginBottom: 8 }}>
-          נבחר אוטומטית: <b>{strainId}</b> (הגעת מהמסך “קניתי”)
+          נבחר אוטומטית: <b>{strainId}</b>
         </div>
       )}
 
-      {/* Search & pick from master */}
       <div className="small" style={{ marginBottom: 6 }}>חיפוש מהרשימה (מומלץ)</div>
       <input
         className="input"
@@ -267,16 +258,15 @@ export default function Report() {
 
       <div className="hr" />
 
-      {/* Free text if not in system */}
       <div className="h2">או: זן חדש שלא מופיע במערכת</div>
-      <div className="small">אם לא מצאת ברשימה, כתוב שם חופשי (ואתה תעדכן את המערכת אחר כך ידנית).</div>
+      <div className="small">אם לא מצאת ברשימה, כתוב שם חופשי.</div>
       <input
         className="input"
         placeholder="שם הזן (למשל: Blue Dream)"
         value={strainNameFree}
         onChange={(e) => {
           setStrainNameFree(e.target.value);
-          if (e.target.value.trim()) setStrainId(""); // if free name chosen, clear id
+          if (e.target.value.trim()) setStrainId("");
         }}
       />
 
