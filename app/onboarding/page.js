@@ -12,83 +12,68 @@ const REASONS = [
   { k: "taste_aroma", t: "טעם/ארומה" }
 ];
 
-const GOALS = [
-  { k: "sleep", t: "שינה" },
-  { k: "calm", t: "רוגע/חרדה" },
-  { k: "pain_body", t: "כאב" },
-  { k: "focus", t: "פוקוס/תפקוד" },
-  { k: "mood", t: "מצב רוח" },
-  { k: "appetite", t: "תיאבון" },
-  { k: "social", t: "חברתי" },
-  { k: "creativity", t: "יצירתיות" }
-];
-
 const INDICATIONS = [
-  { k: "chronic_pain", t: "כאב כרוני" },
-  { k: "sleep_issues", t: "בעיות שינה" },
-  { k: "anxiety", t: "חרדה/סטרס" },
-  { k: "ptsd", t: "PTSD" },
-  { k: "adhd_focus", t: "קשב/פוקוס" },
-  { k: "appetite", t: "תיאבון" },
-  { k: "muscle_spasm", t: "ספאזם/שרירים" },
-  { k: "other", t: "אחר" }
+  "כאב כרוני",
+  "חרדה/סטרס",
+  "שינה",
+  "PTSD",
+  "דיכאון",
+  "תיאבון",
+  "כאבי ראש/מיגרנה",
+  "ספסטיות/נוירולוגי",
+  "אחר"
 ];
 
-const AVOID = [
-  { k: "avoid_anxiety", t: "להימנע מחרדה/לחץ" },
-  { k: "avoid_sedation", t: "להימנע מהרדמה חזקה" },
-  { k: "avoid_stimulation", t: "להימנע מהתעוררות/דופק" },
-  { k: "avoid_munchies", t: "להימנע ממאנצ'יז חזק" },
-  { k: "avoid_confusing_head", t: "להימנע מבלבול/כבד בראש" }
-];
-
-const FLAVORS = [
-  { k: "citrus", t: "הדרי" },
-  { k: "pine", t: "אורן" },
-  { k: "earthy", t: "אדמתי" },
-  { k: "gassy", t: "גזי/דיזל" },
-  { k: "floral", t: "פרחוני" },
-  { k: "spicy", t: "חריף/פלפלי" },
-  { k: "sweet", t: "מתוק" }
+const GOALS = [
+  "הפחתת כאב",
+  "שיפור שינה",
+  "הפחתת חרדה",
+  "שיפור מצב רוח",
+  "שיפור תפקוד/פוקוס",
+  "שיפור תיאבון",
+  "הפחתת מתח בגוף",
+  "אחר"
 ];
 
 function splitCsv(s) {
-  return (s || "").split(",").map(x => x.trim()).filter(Boolean);
+  return (s || "")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
 }
-function joinCsv(arr) {
-  return (arr || []).join(",");
+
+function toggleCsv(setter, currentCsv, key) {
+  const cur = new Set(splitCsv(currentCsv));
+  if (cur.has(key)) cur.delete(key);
+  else cur.add(key);
+  setter([...cur].join(","));
 }
 
 export default function Onboarding() {
   const [session, setSession] = useState(null);
+
+  // flow
+  const [step, setStep] = useState("profile"); // "profile" | "seeds"
+  const [locked, setLocked] = useState(false); // if already filled
+  const [loading, setLoading] = useState(true);
+
+  // products for seeds
   const [products, setProducts] = useState([]);
   const [q, setQ] = useState("");
-  const [selected, setSelected] = useState([]);
-  const [step, setStep] = useState(1);
+  const [selected, setSelected] = useState([]); // [{strain_id, name_he, reasons:[]}]
   const [msg, setMsg] = useState("");
 
+  // IMPORTANT: no nickname here (removed)
   const [profile, setProfile] = useState({
-    consent_given: true,
+    age: 18,
+    gender: "male", // optional
+    condition_1: "pain",
+    condition_2: "",
+    therapeutic_indication: "כאב כרוני",
+    therapeutic_indication_other: "",
+    treatment_goals: "הפחתת כאב,שיפור שינה",
+    patient_notes: "",
 
-    // בסיסי (18+ בלבד)
-    patient_display_name: "",
-    patient_age_band: "18_24",
-    patient_sex: "",
-
-    // התווייה טיפולית (חדש)
-    therapeutic_indication_tags: "sleep_issues,anxiety",
-    therapeutic_indication_free_text: "",
-
-    // מטרות + סימפטומים
-    treatment_goals: "calm,sleep",
-    symptom_pain_0_10: 5,
-    symptom_anxiety_0_10: 5,
-    symptom_sleep_0_10: 5,
-    symptom_focus_0_10: 5,
-
-    avoid_effects: "avoid_anxiety",
-
-    // הרגלי שימוש (כבר היה)
     preferred_method: "smoke",
     mix_preference: "tobacco",
     daily_start_time: "morning",
@@ -96,43 +81,19 @@ export default function Onboarding() {
     sessions_per_day_band: "1_2",
     experience_level: "intermediate",
 
-    // טעם/כיוון
     preferred_flavor_tags: "citrus,pine",
     earthy_tolerance: "avoid_strong",
     preferred_direction_tags: "calm,focus",
 
-    // נעילה
-    onboarding_locked: false,
-    onboarding_completed_at: null,
-    default_goal_tag: "calm",
-    onboarding_notes: ""
+    consent_given: true,
+    onboarding_done: false
   });
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
   }, []);
 
-  useEffect(() => {
-    async function loadProfile() {
-      if (!session) return;
-
-      const { data, error } = await supabase
-        .from("users_profile")
-        .select("*")
-        .eq("user_id", session.user.id)
-        .single();
-
-      if (!error && data) {
-        if (data.onboarding_locked) {
-          window.location.href = "/recommendations";
-          return;
-        }
-        setProfile(prev => ({ ...prev, ...data }));
-      }
-    }
-    loadProfile();
-  }, [session]);
-
+  // load products list once
   useEffect(() => {
     async function loadProducts() {
       const { data, error } = await supabase
@@ -145,278 +106,361 @@ export default function Onboarding() {
     loadProducts();
   }, []);
 
+  // check if profile already exists and is locked
+  useEffect(() => {
+    async function checkExisting() {
+      if (!session) {
+        setLoading(false);
+        return;
+      }
+
+      // look for existing row
+      const { data, error } = await supabase
+        .from("users_profile")
+        .select("user_id,onboarding_done")
+        .eq("user_id", session.user.id)
+        .limit(1);
+
+      if (!error && data && data.length > 0) {
+        const done = !!data[0].onboarding_done;
+        // if row exists - treat as locked (no edits)
+        setLocked(true);
+        setStep("seeds"); // allow proceed to seeds if you want; or keep locked page
+        if (done) setMsg("שאלון ההיכרות כבר מולא. אי אפשר לערוך אותו שוב.");
+        else setMsg("נמצא פרופיל קיים. כרגע נעול לעריכה (לפי ההגדרה שלנו).");
+      }
+
+      setLoading(false);
+    }
+    checkExisting();
+  }, [session]);
+
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
-    if (!s) return products.slice(0, 200);
+    if (!s) return products.slice(0, 7);
     return products
-      .filter(p =>
-        (p.name_he || "").toLowerCase().includes(s) ||
-        (p.name_en || "").toLowerCase().includes(s) ||
-        (p.strain_id || "").toLowerCase().includes(s)
+      .filter(
+        (p) =>
+          (p.name_he || "").toLowerCase().includes(s) ||
+          (p.name_en || "").toLowerCase().includes(s) ||
+          (p.strain_id || "").toLowerCase().includes(s)
       )
-      .slice(0, 200);
+      .slice(0, 7);
   }, [q, products]);
-
-  function toggleCsvField(field, key, max = 6) {
-    const cur = splitCsv(profile[field]);
-    const has = cur.includes(key);
-    let next = has ? cur.filter(x => x !== key) : [...cur, key];
-    if (next.length > max) next = next.slice(0, max);
-    setProfile(prev => ({ ...prev, [field]: joinCsv(next) }));
-  }
 
   function toggleSelect(p) {
     setMsg("");
-    const exists = selected.find(x => x.strain_id === p.strain_id);
+    const exists = selected.find((x) => x.strain_id === p.strain_id);
     if (exists) {
-      setSelected(selected.filter(x => x.strain_id !== p.strain_id));
+      setSelected(selected.filter((x) => x.strain_id !== p.strain_id));
       return;
     }
+    // ✅ no max limit
     setSelected([...selected, { strain_id: p.strain_id, name_he: p.name_he, reasons: [] }]);
   }
 
   function toggleReason(strainId, reasonKey) {
-    setSelected(prev => prev.map(s => {
-      if (s.strain_id !== strainId) return s;
-      const has = s.reasons.includes(reasonKey);
-      let next = has ? s.reasons.filter(r => r !== reasonKey) : [...s.reasons, reasonKey];
-      if (next.length > 2) next = next.slice(0, 2);
-      return { ...s, reasons: next };
-    }));
+    setSelected((prev) =>
+      prev.map((s) => {
+        if (s.strain_id !== strainId) return s;
+        const has = s.reasons.includes(reasonKey);
+        let next = has ? s.reasons.filter((r) => r !== reasonKey) : [...s.reasons, reasonKey];
+        // keep max 2 reasons per strain
+        if (next.length > 2) next = next.slice(0, 2);
+        return { ...s, reasons: next };
+      })
+    );
   }
 
-  async function saveStep1() {
+  async function saveProfile() {
     setMsg("");
     if (!session) return setMsg("צריך להתחבר קודם.");
-    if (!profile.patient_display_name.trim()) return setMsg("מלא שם תצוגה/כינוי.");
-    if (splitCsv(profile.therapeutic_indication_tags).length === 0) return setMsg("בחר לפחות התוויה טיפולית אחת.");
-    if (splitCsv(profile.treatment_goals).length === 0) return setMsg("בחר לפחות מטרה אחת.");
 
+    // validation: age >= 18
+    const ageNum = Number(profile.age);
+    if (!Number.isFinite(ageNum) || ageNum < 18) return setMsg("גיל חייב להיות 18 ומעלה.");
+
+    // validation: indication other
+    if (profile.therapeutic_indication === "אחר" && !profile.therapeutic_indication_other.trim()) {
+      return setMsg("בחרת 'אחר' בהתווייה טיפולית—כתוב במה מדובר.");
+    }
+
+    // if locked, prevent save
+    if (locked) return setMsg("השאלון נעול לעריכה אחרי מילוי ראשון.");
+
+    // Insert only (so it can't be edited later)
     const payload = {
       user_id: session.user.id,
       ...profile,
-      onboarding_locked: false,
-      onboarding_completed_at: null
+      age: ageNum,
+      onboarding_done: true
     };
 
-    const { error } = await supabase.from("users_profile").upsert(payload);
-    if (error) return setMsg(error.message);
+    const { error } = await supabase.from("users_profile").insert(payload);
+    if (error) {
+      // if already exists, lock it
+      setLocked(true);
+      return setMsg("נראה שהשאלון כבר מולא בעבר ולכן הוא נעול לעריכה.");
+    }
 
-    setMsg("נשמר ✅ עוברים לבחירת זנים שעבדו.");
-    setStep(2);
+    setMsg("נשמר ✅ עכשיו עוברים לבחירת זנים שעבדו לך.");
+    setStep("seeds");
+    setLocked(true); // lock immediately after first save
   }
 
-  async function finishOnboarding() {
+  async function saveSeeds() {
     setMsg("");
     if (!session) return setMsg("צריך להתחבר קודם.");
-    if (selected.length < 3) return setMsg("בחר לפחות 3 זנים שעבדו לך.");
-    const missingReason = selected.find(s => s.reasons.length === 0);
-    if (missingReason) return setMsg(`בחר סיבה אחת לפחות עבור: ${missingReason.name_he || missingReason.strain_id}`);
 
+    if (selected.length < 3) return setMsg("בחר לפחות 3 זנים שעבדו לך (אין מקסימום).");
+
+    const missingReason = selected.find((s) => s.reasons.length === 0);
+    if (missingReason) {
+      return setMsg(`בחר לפחות סיבה אחת עבור: ${missingReason.name_he || missingReason.strain_id}`);
+    }
+
+    // update seeds (this can be editable later if you want; for now we allow it here)
     const payload = {
       user_id: session.user.id,
-      ...profile,
-      liked_strains: selected.map(s => ({ strain_id: s.strain_id, reasons: s.reasons })),
-      onboarding_locked: true,
-      onboarding_completed_at: new Date().toISOString()
+      liked_strains: selected.map((s) => ({ strain_id: s.strain_id, reasons: s.reasons }))
     };
 
-    const { error } = await supabase.from("users_profile").upsert(payload);
+    const { error } = await supabase.from("users_profile").update(payload).eq("user_id", session.user.id);
     if (error) return setMsg(error.message);
 
-    window.location.href = "/recommendations";
+    setMsg("נשמר! אפשר לעבור להמלצות.");
+  }
+
+  if (loading) {
+    return (
+      <div className="card">
+        <div className="h1">שאלון היכרות</div>
+        <div className="small">טוען…</div>
+      </div>
+    );
   }
 
   return (
     <div className="card">
       <div className="h1">שאלון היכרות</div>
-      <div className="small">
-        {step === 1
-          ? "שלב 1: פרטי משתמש + התוויה טיפולית + מטרות והעדפות (ממלאים פעם אחת בלבד)."
-          : "שלב 2: זנים שעבדו (מינימום 3, ללא מקסימום)."}
-      </div>
+      <div className="small">שלב 1: פרופיל מטופל · שלב 2: זנים שעבדו לך</div>
 
-      {msg && <div className="small" style={{ marginTop: 10 }}>{msg}</div>}
+      {!session && <div className="small" style={{ marginTop: 10 }}>צריך להתחבר קודם.</div>}
+
       <div className="hr" />
 
-      {step === 1 && (
+      {/* step switch */}
+      <div className="tabs">
+        <div
+          className={"tab " + (step === "profile" ? "tabActive" : "")}
+          onClick={() => setStep("profile")}
+        >
+          1) היכרות
+        </div>
+        <div
+          className={"tab " + (step === "seeds" ? "tabActive" : "")}
+          onClick={() => setStep("seeds")}
+        >
+          2) זנים שעבדו
+        </div>
+      </div>
+
+      {msg && <div className="small" style={{ marginBottom: 10 }}>{msg}</div>}
+
+      {/* STEP 1: PROFILE */}
+      {step === "profile" && (
         <>
-          <div className="h2">פרטי משתמש (18+ בלבד)</div>
-          <div className="row">
-            <input
-              className="input"
-              placeholder="שם תצוגה / כינוי"
-              value={profile.patient_display_name}
-              onChange={(e) => setProfile(prev => ({ ...prev, patient_display_name: e.target.value }))}
-            />
-            <select
-              className="input"
-              value={profile.patient_age_band}
-              onChange={(e) => setProfile(prev => ({ ...prev, patient_age_band: e.target.value }))}
-            >
-              <option value="18_24">18–24</option>
-              <option value="25_34">25–34</option>
-              <option value="35_44">35–44</option>
-              <option value="45_plus">45+</option>
-            </select>
-            <select
-              className="input"
-              value={profile.patient_sex || ""}
-              onChange={(e) => setProfile(prev => ({ ...prev, patient_sex: e.target.value }))}
-            >
-              <option value="">מין (אופציונלי)</option>
-              <option value="female">נקבה</option>
-              <option value="male">זכר</option>
-              <option value="other">אחר</option>
-              <option value="prefer_not">מעדיף לא לציין</option>
-            </select>
-          </div>
-
-          <div className="hr" />
-          <div className="h2">התווייה טיפולית (לאיזה צרכים משתמש)</div>
-          <div className="row">
-            {INDICATIONS.map(x => {
-              const active = splitCsv(profile.therapeutic_indication_tags).includes(x.k);
-              return (
-                <button
-                  key={x.k}
-                  className={"btn " + (active ? "btnPrimary" : "")}
-                  onClick={() => toggleCsvField("therapeutic_indication_tags", x.k, 6)}
-                >
-                  {x.t}
-                </button>
-              );
-            })}
-          </div>
-
-          <div style={{ marginTop: 10 }}>
-            <textarea
-              className="input"
-              rows={3}
-              placeholder="אם 'אחר' – כתוב כאן בקצרה (אופציונלי)"
-              value={profile.therapeutic_indication_free_text || ""}
-              onChange={(e) => setProfile(prev => ({ ...prev, therapeutic_indication_free_text: e.target.value }))}
-            />
-          </div>
-
-          <div className="hr" />
-          <div className="h2">מטרות טיפול (בחר כמה)</div>
-          <div className="row">
-            {GOALS.map(g => {
-              const active = splitCsv(profile.treatment_goals).includes(g.k);
-              return (
-                <button
-                  key={g.k}
-                  className={"btn " + (active ? "btnPrimary" : "")}
-                  onClick={() => toggleCsvField("treatment_goals", g.k, 6)}
-                >
-                  {g.t}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="hr" />
-          <div className="h2">חומרת סימפטומים (0–10)</div>
-          {[
-            ["כאב", "symptom_pain_0_10"],
-            ["חרדה/לחץ", "symptom_anxiety_0_10"],
-            ["בעיות שינה", "symptom_sleep_0_10"],
-            ["קושי בפוקוס", "symptom_focus_0_10"]
-          ].map(([label, key]) => (
-            <div key={key} style={{ marginBottom: 10 }}>
-              <div className="small">{label}: {profile[key]}</div>
-              <input
-                className="input"
-                type="range"
-                min="0"
-                max="10"
-                value={profile[key]}
-                onChange={(e) => setProfile(prev => ({ ...prev, [key]: Number(e.target.value) }))}
-              />
+          {locked ? (
+            <div className="small" style={{ marginTop: 10 }}>
+              השאלון כבר מולא ולכן הוא נעול לעריכה. אפשר להמשיך לשלב הזנים או ללכת להמלצות.
+              <div className="row" style={{ marginTop: 10 }}>
+                <a className="btn" href="/recommendations">להמלצות</a>
+                <button className="btn btnPrimary" onClick={() => setStep("seeds")}>המשך לזנים</button>
+              </div>
             </div>
-          ))}
-
-          <div className="hr" />
-          <div className="h2">מה חשוב להימנע (אופציונלי)</div>
-          <div className="row">
-            {AVOID.map(a => {
-              const active = splitCsv(profile.avoid_effects).includes(a.k);
-              return (
-                <button
-                  key={a.k}
-                  className={"btn " + (active ? "btnPrimary" : "")}
-                  onClick={() => toggleCsvField("avoid_effects", a.k, 6)}
+          ) : (
+            <>
+              <div className="h2">פרטים בסיסיים</div>
+              <div className="row">
+                <input
+                  className="input"
+                  type="number"
+                  min="18"
+                  value={profile.age}
+                  onChange={(e) => setProfile({ ...profile, age: e.target.value })}
+                  placeholder="גיל (18+)"
+                />
+                <select
+                  className="input"
+                  value={profile.gender}
+                  onChange={(e) => setProfile({ ...profile, gender: e.target.value })}
                 >
-                  {a.t}
-                </button>
-              );
-            })}
-          </div>
+                  <option value="male">זכר</option>
+                  <option value="female">נקבה</option>
+                  <option value="other">אחר</option>
+                  <option value="na">מעדיף לא לציין</option>
+                </select>
+              </div>
 
-          <div className="hr" />
-          <div className="h2">טעמים מועדפים (עד 6)</div>
-          <div className="row">
-            {FLAVORS.map(f => {
-              const active = splitCsv(profile.preferred_flavor_tags).includes(f.k);
-              return (
-                <button
-                  key={f.k}
-                  className={"btn " + (active ? "btnPrimary" : "")}
-                  onClick={() => toggleCsvField("preferred_flavor_tags", f.k, 6)}
+              <div className="hr" />
+              <div className="h2">התווייה טיפולית</div>
+              <select
+                className="input"
+                value={profile.therapeutic_indication}
+                onChange={(e) => setProfile({ ...profile, therapeutic_indication: e.target.value })}
+              >
+                {INDICATIONS.map((x) => (
+                  <option key={x} value={x}>{x}</option>
+                ))}
+              </select>
+
+              {profile.therapeutic_indication === "אחר" && (
+                <input
+                  className="input"
+                  style={{ marginTop: 10 }}
+                  value={profile.therapeutic_indication_other}
+                  onChange={(e) => setProfile({ ...profile, therapeutic_indication_other: e.target.value })}
+                  placeholder="פרט את ההתווייה"
+                />
+              )}
+
+              <div className="hr" />
+              <div className="h2">מטרות טיפול (אפשר כמה)</div>
+              <div className="row">
+                {GOALS.map((g) => (
+                  <button
+                    key={g}
+                    className={"btn " + (splitCsv(profile.treatment_goals).includes(g) ? "btnPrimary" : "")}
+                    onClick={() => toggleCsv((v) => setProfile({ ...profile, treatment_goals: v }), profile.treatment_goals, g)}
+                  >
+                    {g}
+                  </button>
+                ))}
+              </div>
+
+              <div className="hr" />
+              <div className="h2">הרגלי שימוש כלליים</div>
+              <div className="row">
+                <select
+                  className="input"
+                  value={profile.preferred_method}
+                  onChange={(e) => setProfile({ ...profile, preferred_method: e.target.value })}
                 >
-                  {f.t}
-                </button>
-              );
-            })}
-          </div>
+                  <option value="smoke">עישון</option>
+                  <option value="vape">וייפ</option>
+                  <option value="oil">שמן</option>
+                  <option value="edible">אכיל</option>
+                </select>
 
-          <div className="hr" />
-          <div className="h2">כיוונים מועדפים (עד 3)</div>
-          <div className="row">
-            {GOALS.map(d => {
-              const active = splitCsv(profile.preferred_direction_tags).includes(d.k);
-              return (
-                <button
-                  key={d.k}
-                  className={"btn " + (active ? "btnPrimary" : "")}
-                  onClick={() => toggleCsvField("preferred_direction_tags", d.k, 3)}
+                <select
+                  className="input"
+                  value={profile.mix_preference}
+                  onChange={(e) => setProfile({ ...profile, mix_preference: e.target.value })}
                 >
-                  {d.t}
-                </button>
-              );
-            })}
-          </div>
+                  <option value="pure">נקי</option>
+                  <option value="tobacco">עם טבק</option>
+                </select>
 
-          <div className="hr" />
-          <div className="row">
-            <button className="btn btnPrimary" onClick={saveStep1}>המשך לבחירת זנים</button>
-            <a className="btn" href="/">בית</a>
-          </div>
+                <select
+                  className="input"
+                  value={profile.daily_start_time}
+                  onChange={(e) => setProfile({ ...profile, daily_start_time: e.target.value })}
+                >
+                  <option value="morning">בוקר</option>
+                  <option value="noon">צהריים</option>
+                  <option value="evening">ערב</option>
+                  <option value="night">לילה</option>
+                </select>
+              </div>
+
+              <div className="row" style={{ marginTop: 10 }}>
+                <input
+                  className="input"
+                  type="number"
+                  step="0.05"
+                  value={profile.typical_session_grams}
+                  onChange={(e) => setProfile({ ...profile, typical_session_grams: Number(e.target.value) })}
+                  placeholder="כמות טיפוסית (גרם)"
+                />
+
+                <select
+                  className="input"
+                  value={profile.sessions_per_day_band}
+                  onChange={(e) => setProfile({ ...profile, sessions_per_day_band: e.target.value })}
+                >
+                  <option value="1_2">1–2 ביום</option>
+                  <option value="3_4">3–4 ביום</option>
+                  <option value="5_plus">5+ ביום</option>
+                </select>
+
+                <select
+                  className="input"
+                  value={profile.experience_level}
+                  onChange={(e) => setProfile({ ...profile, experience_level: e.target.value })}
+                >
+                  <option value="beginner">מתחיל</option>
+                  <option value="intermediate">בינוני</option>
+                  <option value="advanced">מתקדם</option>
+                </select>
+              </div>
+
+              <div className="hr" />
+              <div className="h2">הערות חופשיות (נשמר לניתוח)</div>
+              <textarea
+                className="input"
+                style={{ minHeight: 110 }}
+                value={profile.patient_notes}
+                onChange={(e) => setProfile({ ...profile, patient_notes: e.target.value })}
+                placeholder="כל דבר שחשוב לדעת על המטופל/ת, רגישויות, מה עובד ומה לא, וכו׳"
+              />
+
+              <div className="hr" />
+              <div className="row">
+                <button className="btn btnPrimary" onClick={saveProfile}>שמור והמשך</button>
+                <a className="btn" href="/">בית</a>
+              </div>
+            </>
+          )}
         </>
       )}
 
-      {step === 2 && (
+      {/* STEP 2: SEEDS */}
+      {step === "seeds" && (
         <>
-          <div className="h2">בחירת זנים שעבדו (Seeds)</div>
-          <div className="small">מינימום 3. ללא הגבלה. לכל זן בוחרים סיבה אחת לפחות.</div>
+          <div className="h2">בחירת זנים שעבדו עד כה</div>
+          <div className="small">בחר מינימום 3. אין מקסימום. לכל זן: בחר 1–2 סיבות.</div>
 
           <div className="hr" />
-          <input className="input" placeholder="חיפוש לפי שם/ID…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input
+            className="input"
+            placeholder="חיפוש לפי שם/ID…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
 
-          <div className="list" style={{ marginTop: 10, maxHeight: 320, overflowY: "auto", paddingRight: 6 }}>
-            {filtered.map(p => {
-              const isSel = !!selected.find(x => x.strain_id === p.strain_id);
+          <div
+            className="list"
+            style={{
+              marginTop: 10,
+              maxHeight: 260,
+              overflowY: "auto",
+              border: "1px solid rgba(255,255,255,0.12)",
+              borderRadius: 12,
+              padding: 8
+            }}
+          >
+            {filtered.map((p) => {
+              const isSel = !!selected.find((x) => x.strain_id === p.strain_id);
               return (
                 <button
                   key={p.strain_id}
                   className="btn"
-                  style={{ textAlign: "left", display: "flex", justifyContent: "space-between", gap: 12 }}
+                  style={{ textAlign: "left", display: "flex", justifyContent: "space-between" }}
                   onClick={() => toggleSelect(p)}
                 >
                   <div>
-                    <div style={{ fontWeight: 800, color: "#111" }}>{p.name_he || p.name_en || p.strain_id}</div>
-                    <div className="small" style={{ color: "#333" }}>
+                    <div style={{ fontWeight: 700 }}>{p.name_he || p.name_en || p.strain_id}</div>
+                    <div className="small">
                       {p.strain_id} · {p.t_category || ""}{p.c_category ? `/${p.c_category}` : ""}
                     </div>
                   </div>
@@ -427,15 +471,16 @@ export default function Onboarding() {
           </div>
 
           <div className="hr" />
-          <div className="h2">סיבות (עד 2 לכל זן)</div>
+          <div className="h2">סיבות לכל זן (עד 2)</div>
+
           <div className="list">
-            {selected.map(s => (
+            {selected.map((s) => (
               <div className="card" key={s.strain_id}>
-                <div style={{ fontWeight: 900, color: "#111" }}>{s.name_he || s.strain_id}</div>
-                <div className="small" style={{ color: "#333" }}>{s.strain_id}</div>
+                <div style={{ fontWeight: 800 }}>{s.name_he || s.strain_id}</div>
+                <div className="small">{s.strain_id}</div>
 
                 <div className="row" style={{ marginTop: 10 }}>
-                  {REASONS.map(r => (
+                  {REASONS.map((r) => (
                     <button
                       key={r.k}
                       className={"btn " + (s.reasons.includes(r.k) ? "btnPrimary" : "")}
@@ -451,8 +496,9 @@ export default function Onboarding() {
 
           <div className="hr" />
           <div className="row">
-            <button className="btn btnPrimary" onClick={finishOnboarding}>סיום ושמירה</button>
-            <button className="btn" onClick={() => setStep(1)}>חזרה</button>
+            <button className="btn btnPrimary" onClick={saveSeeds}>שמור זנים</button>
+            <a className="btn" href="/recommendations">להמלצות</a>
+            <a className="btn" href="/">בית</a>
           </div>
         </>
       )}
