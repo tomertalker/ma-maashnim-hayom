@@ -106,3 +106,58 @@ Handoff decision (2026-09-25): Sydney is fine for the pilot; the app's productio
 - `/sdcard/Download/mmh/survey/{DEPLOY.md, survey.html, schema.sql}` — survey deploy brief, original page (differs from the live `index.html` only in the 18 edited line ranges recorded in the survey's `PROGRESS.md`), schema.
 - `/sdcard/Download/mmh/reco-engine/{stage0,stage1}/`, `/sdcard/Download/mmh/ultra-scraper/` — copies of deliverables.
 - `/root/projects/` still exists with old `CLAUDE.md` backups from earlier projects; nothing there is referenced by the four folders (paths were updated in reco-engine commit `712a19f`).
+
+---
+
+## 2. Patient-flow map
+
+Legend: **WORKS** = code complete and exercisable today · **PARTIAL** = code exists but depends on something missing or behaves differently from the intent · **MISSING** = no code. "Today" means: with a Supabase project that has the four tables (which does not exist yet, §1.1). Where the mockup defines the intent, the mockup line is cited too.
+
+| # | Link | App status | Evidence (app) | Mockup intent |
+|---|---|---|---|---|
+| F1 | Open the app → consent / disclaimer / age gate | PARTIAL | One-line disclaimer under the login form (`app/page.js:61-63`); age ≥ 18 checked only when saving the profile (`app/onboarding/page.js:180-181`); `consent_given: true` saved silently (`:88`). No consent text, no "what is collected". | Splash with disclaimer and CTA (`:121-128`). Survey has a proper consent block (`ma-oved-lecha/index.html:262-265`). |
+| F2 | Sign up / sign in (email + password) | PARTIAL | `supabase.auth.signUp` / `signInWithPassword` / `signOut` (`app/page.js:18-34`); session listener (`:12-16`); menu after login (`:67-75`). Code is complete; **untested against any project** (none documented). Email confirmation may be required depending on Auth settings (message at `:22` anticipates it). | No login in the mockup (local state only). |
+| F3 | Onboarding step 1 → `users_profile` row | PARTIAL | Form (`app/onboarding/page.js:283-421`) → validation (`:179-186`) → `insert` (`:199`). Works if the table exists. Locked forever after the first save (`:187-189, :208`, message `:275`). Flavors / earthy tolerance / direction are **not asked**, but saved as defaults (`:84-86`). | 3 chip segments incl. flavors, purity, budget, dose band (`:133-155`); profile editable from the profile screen (`:468`). |
+| F4 | Onboarding step 2 → seed strains with reasons → `liked_strains` | PARTIAL | Search over `products_master`, top 7 (`:138-149`), ≥ 3 strains with 1-2 reasons each (`:215-220`), `update liked_strains` (`:223-228`). Depends on `products_master` having rows — **no loader or data exists** (§1.3). The seeds step is reachable even when the profile step is locked (`:128`), so seeds can be re-saved. | Seeds optional ("אפשר גם לדלג", `:149`), chip list of all in-stock strains (`:309`). |
+| F5 | Profile + seeds → personal recommendations | PARTIAL | Load profile (`app/recommendations/page.js:56-66`, `.single()` → "לא נמצא פרופיל" if none) + products (`:68-73`) → score (`:78-112`) → 12 cards with "למה: גנטיקה=N · טעם=M" (`:187-199`). Blockers: `products_master` empty; `parent1_canon/parent2_canon/terpenes` columns must be filled with canonical values for the genetic and taste terms to be non-zero; terpene id vocabulary mismatch (§1.1.2). No price, stock, image, category filter or explanation text. | Ranked list with match %, 4 sub-score bars, tiered reasons, cautions, terpene badges, price + "במלאי", filters (`:333-342`). |
+| F6 | "Similar patients recommend" tab | PARTIAL (will be empty in the pilot) | Same `mix_preference` + `daily_start_time`, ≤ 30 users, their liked reports aggregated (`:115-156`). Needs ≥ 2 users matching on both fields with liked reports. Requires cross-user RLS reads (§1.1.1). | Not in the mockup ("פרופיל דומה יתמלא מדיווחי מטופלים", `:346`). |
+| F7 | Recommendation → strain page | **MISSING** | No route for a product; cards are not tappable. `products_master` has no image/price/description columns in any query. | Full product page: 3-generation genetics, terpenes → effect bars, purity pills, brand/grower/country/price, Cannabiz rating, "קניתי" (`:345-353`). Raw Jane data has parents, terpene lists, image for most flowers (§1.3), so this is buildable from Jane-only fields except the rating. |
+| F8 | "קניתי" → purchase record → report pre-filled | PARTIAL | Insert `purchases` (`:162-165`) then `router.push('/report?strain_id=…')` (`:170`); report reads the param (`app/report/page.js:76-85`) and shows "נבחר אוטומטית" (`:217-221`). Works if tables exist. Purchases are never read back anywhere. | Log screen with source "מהמלצה / קנייה עיוורת" and repeat counter (`:378-399, :414-428`). |
+| F9 | Review (structured report) → `reports` | PARTIAL | Liked: 6 effect sliders 1-10, relief 0-10, ≤ 2 reasons (`:273-310`); disliked: ≤ 2 reasons, severity 1-5, taste detail if "טעם", 3 side-effect boxes (`:312-359`); both: duration + ≤ 150 chars (`:361-374`); validation (`:128-136`); insert (`:170`). Free-text strain needs `reports.strain_name_free` (`:144-145`). Works if the table exists. No "לא בטוח" verdict. | Verdict like/unsure/dislike, 1-5 stars, helped/bothered chips (`:389-395`). |
+| F10 | Photos with a review | **MISSING** | No storage bucket, no upload UI, no image column anywhere. Handoff decision: yes, with disclaimers. | Not in the mockup either. |
+| F11 | Reviews visible to others (per strain, aggregated) | **MISSING** | Only the similar-tab aggregate (F6). No per-strain review list, no counts, no own-review history. | Product page shows the Cannabiz aggregate rating only (`:346`). |
+| F12 | Ongoing use: journal / history of my reports | **MISSING** | After saving, the form resets (`app/report/page.js:173-195`); nothing lists past reports or purchases. | Journal list (`:407-412`), bag detail with "קניתי שוב" (`:414-428`), home dashboard stats (`:314-330`). |
+| F13 | Reports feed back into my recommendations | PARTIAL / effectively MISSING | Personal score uses only onboarding seeds (`app/recommendations/page.js:81, :86-92`); own reports affect nothing for me. Reports only feed **other** users' similar tab. | Verdicts (+0.12 / −0.5), repeat purchases, helped/bothered all enter the score (`:229-238, :249-251`). |
+| F14 | Doctor report / export | **MISSING** | — | Table + keep/avoid + medical-attention flags; PDF is a placeholder `alert` (`:436-454`). |
+| F15 | Stock / price alerts, live inventory | **MISSING** | No refresh job, no stock field used. | Placeholder text on home (`:318`); recs badge "במלאי · מחיר חי" (`:342`). |
+| F16 | Survey → engine (first-party ratings) | WORKS as a collector; downstream MISSING | Survey posts `responses` rows (`ma-oved-lecha/index.html:426-431`). No export, analysis or join to `products_master`/`strain_id` exists; keys are SKU (`s`). | — |
+| F17 | Catalogue refresh (Jane → catalogue → app) | PARTIAL | `reco-engine/inventory/fetch_ultra.js` + `build_catalog.js` produce `data/catalog_<date>.json` (Jane-only, no genetics/terpenes). Nothing loads any catalogue into `products_master`. | Recs header says "מלאי T22/C4 חי" (`:337`). |
+
+### 2.1 Features the mockup has and the app lacks
+
+Screens: splash with disclaimer and demo profile · home dashboard (stats, "מה שעובד לך", next recommendation, doctor-report CTA) · strain/product page · purchase log with source (recommendation vs blind) · journal · bag detail with repeat-purchase counter · doctor report · profile view / edit / reset · bottom tab navigation.
+
+Onboarding: chip UI in 3 segments; flavors; purity preferences (indoor, pesticide-free, non-irradiated); budget (presets or free amount); dose band; T22/C4 "start low" note for beginners; seeds optional.
+
+Recommendations: match percentage; four sub-score bars (effect, genetics 3 generations, direction, taste); reasons with evidence tiers מבוסס/ראשוני/אנקדוטלי; cautions (beginner, anxiety-sensitive); terpene badges or "טרפנים לא פורסמו"; price and budget badge; stock badge; filters (non-irradiated, pesticide-free, indoor, budget); "unsure" verdict; verdict/repeat feedback into the score; filtering out strains marked "לא התאים".
+
+Engine: terpene → effect knowledge table with tiers; 3-generation genetics with he↔en alias canonicalisation; direction (indica/sativa vs day/night goals); sedation penalty from side effects; Hebrew `explain()`.
+
+Layout: RTL (`dir="rtl"`), phone-first CSS.
+
+### 2.2 Features the app has and the mockup lacks
+
+Real authentication and per-user persistence · "similar patients" tab · free-text strain name in a report · 1-10 effect sliders and 0-10 relief · dislike severity and taste detail · side-effect booleans in the schema · profile lock (arguably a bug, not a feature) · seeds with 1-2 reasons each.
+
+### 2.3 Data-vocabulary mismatches across parts
+
+| Concept | App | Mockup | Survey | Catalogue / raw Jane |
+|---|---|---|---|---|
+| Product key | `strain_id` (text) | `id` = Jane slug, e.g. `lakota-2360` | `s` = SKU | `jane_product_id` slug (e.g. `pdd-mini`) + `sku` |
+| Category | `t_category`, `c_category` (separate) | literal "T22/C4" | `cat` "T22/C4" | `category` "T22/C4" |
+| Genetics | `parent1_canon`, `parent2_canon` | `p1/p1e`, `p2/p2e`, `o/oe`, `g1/g2` | none | raw `parents[0]`, `parents_second[0]` (he + en); not in the catalogue |
+| Terpenes | csv of ids, expects `alpha_pinene`, `beta_caryophyllene`… | `terps[{i,p}]` with alias map `caryophyllene→beta_caryophyllene`, `penchol→fenchol` | none | raw `terpenes[{id,heb_name,percentage}]` with ids `pinene`, `caryophyllene`…; not in the catalogue |
+| Indication | Hebrew strings (`INDICATIONS`, 9) | Hebrew strings (`INDIC`, 7, different set) | `profile.uses` keys | — |
+| Reasons / effects | `like_reasons` keys (7), `dislike_reasons` (10) | `HELPED` (7), `BOTHERED` (7), different keys | per-use 0-3 effect + `sidefx` keys | — |
+
+No two parts share a vocabulary end to end. The catalogue's `jane_product_id` + `sku` pair is the natural bridge.
