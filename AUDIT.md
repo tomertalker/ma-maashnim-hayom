@@ -161,3 +161,66 @@ Real authentication and per-user persistence · "similar patients" tab · free-t
 | Reasons / effects | `like_reasons` keys (7), `dislike_reasons` (10) | `HELPED` (7), `BOTHERED` (7), different keys | per-use 0-3 effect + `sidefx` keys | — |
 
 No two parts share a vocabulary end to end. The catalogue's `jane_product_id` + `sku` pair is the natural bridge.
+
+---
+
+## 3. Gaps, ordered by what blocks the pilot
+
+"Blocks" = without it, the 2-3 testers cannot produce the screenshots the pilot is for (do the recommendations match what knowledgeable patients already know?). What can run **today** without any build: the survey (TEST_PLAN part א) and the mockup, including its recommendation-quality check (part ב, step ב15). Everything about the Next.js app is blocked.
+
+| # | Gap | Blocks | Evidence | Smallest fix |
+|---|---|---|---|---|
+| G1 | **The app has no backend.** No Supabase project, schema or URL is documented; the four tables do not exist in any SQL. | All of TEST_PLAN part ג. | §1.1, §1.1.1; `grep` found no SQL; `.env.example` only. | Decide project (new, or new tables in `yernxedmokifcmpakzgd` for the pilot — Sydney is accepted per handoff), write `schema.sql` from §1.1.1 with per-user RLS, run it, enable email auth. |
+| G2 | **`products_master` has no data and no loader.** The Stage 1 catalogue lacks the columns the engine scores on (parents, terpenes); the raw Jane pages have them. | Part ג (search lists empty, recommendations empty even with a profile). | §1.3 raw-page counts; `app/recommendations/page.js:68-73, 94-109`. | Loader script (raw Jane pages → rows): `strain_id ← jane product_id slug`, `sku`, names, `t_category/c_category ← split "T22/C4"`, `parent1_canon/parent2_canon ← parents[0].eng_name` lower-cased, `terpenes ← csv of ids`, `internal_product_id ← store_product_id`, plus `price`, `in_stock`, `image_url`, `characterization`. Jane-only fields; refresh the snapshot first (15 requests, inside the reported approval). |
+| G3 | **Not deployed; build needs env vars.** | Part ג (testers need a URL). | §1.1 build result; `lib/supabaseClient.js:6`. | Host on Vercel with the two `NEXT_PUBLIC_*` vars, or `output: 'export'` + GitHub Pages like the survey (all pages are client-side, so static export works). Optionally create the client lazily so `next build` no longer needs the vars. |
+| G4 | **Taste preferences are hidden defaults.** Every user is saved with `citrus,pine` / `avoid_strong` / `calm,focus`. | Validity of part ג step ג10 (the recommendations would not reflect the tester). | `app/onboarding/page.js:84-86`; used at `app/recommendations/page.js:82-83, 98-105`. | Add flavor + earthy-tolerance chips to onboarding step 1 (the mockup already has the UI, `:144`), or drop those terms until asked. |
+| G5 | **Terpene vocabulary mismatch** between the taste map and Jane ids. | Quality of ג10 (pine/gassy never score). | `app/recommendations/page.js:14-19` vs raw ids in §1.3. | Map `pinene→pine`, `caryophyllene→gassy/spicy` in the loader or in `scoreTaste`. |
+| G6 | **No strain page** (F7). Testers cannot see why a strain was recommended or check its genetics. | Depth of the ✓/✗ judgement in ג10; the mockup covers this for ב16. | §2 F7; mockup `:345-353`. | Route `/strain/[strain_id]` reading `products_master` (genetics, terpenes, price, stock, image). Skip the Cannabiz rating until the formal approval names public display. |
+| G7 | **Explanations are raw numbers**; no price, stock, filters; no "unsure" verdict. | Pilot feedback quality. | `app/recommendations/page.js:193`; mockup `:244-264`. | Port the mockup engine (`predict/geneOf/score/explain`) into `lib/engine.js`; it is plain JS and already produces Hebrew reasons. |
+| G8 | **Reports do not change my recommendations; no journal** (F12, F13). | "Ongoing use" cannot be tested at all. | `app/recommendations/page.js:81-92`; `app/report/page.js:173-195`. | Read own `reports`/`purchases` into the score (verdict ±, repeat +) and add a `/journal` list. |
+| G9 | **Reviews visible to others, photos** (F10, F11). Decision taken: yes, with disclaimers. | Not needed for the first pilot. | §2. | Supabase Storage bucket + upload on the report form + aggregated per-strain review block on the strain page, with the disclaimers used in the survey. |
+| G10 | **Doctor report, alerts, live inventory refresh** (F14, F15, F17). | Not needed for the first pilot. | §2. | After the pilot. |
+| G11 | **Privacy model for "similar patients"** requires cross-user reads. | Schema design (G1). | §1.1.1. | Server-side view/RPC returning aggregates only, or accept in the pilot and document it. |
+| G12 | **Profile is locked after first save**; no way to fix a typo. | Tester frustration; bad data. | `app/onboarding/page.js:187-208`. | Allow update of own row (RLS `update using user_id = auth.uid()`), keep an `updated_at`. |
+| G13 | **No RTL**, triple-defined CSS, Node-20 deprecation warning from supabase-js. | Readability on phones. | `app/layout.js:10`; `styles/globals.css`. | `dir="rtl"` on `<html>`; collapse CSS to the last block. |
+| G14 | **Legal:** formal Cannabiz approval not filed; the mockup and the old snapshot carry Cannabiz-derived fields (ratings, origin, grandparents, 112 cannabiz.co.il links). | Publishing anything with those fields. | §1.3, `inventory/terms/approval/` has only a README; mockup line 206. | File the email in `reco-engine/inventory/terms/approval/`; build `products_master` from Jane raw only; do not publish the mockup file on a public URL. |
+| G15 | **Survey data has no downstream.** Responses are keyed by SKU and never analysed or joined to the app. | Evaluation of the engine later, not the pilot. | §2 F16. | Export script: `responses.data.ratings` → per-SKU aggregates; `products_master.sku` makes the join. |
+| G16 | **Mockup bug** `dPickClear` recursion; dead code. | Only step ב7. | mockup `:367`. | One-line fix when the mockup is next edited; testers are warned. |
+
+## 4. Proposed build order
+
+Each step is small, testable, and ends with a commit. Nothing here is started until Tomer approves.
+
+**B0 — Decisions needed from Tomer (no code)**
+1. Supabase project for the app: new project, or new tables in the survey's project for the pilot. (Handoff: Sydney OK for the pilot, Europe for launch.)
+2. Hosting: Vercel (needs an account and the two env vars) or static export to GitHub Pages (same pattern as the survey).
+3. Privacy of the "similar patients" tab (G11): aggregate server-side, or accept cross-user reads for 3-4 testers.
+4. Whether to run the recommendation-quality check on the **mockup now** (TEST_PLAN ב14–ב16, possible today) while the app catches up. Recommended: yes, it answers the pilot's question this week.
+
+**B1 — Schema** (`app/supabase/schema.sql`, new file): the four tables from §1.1.1 including `reports.strain_name_free`, `products_master` with `sku`, `price`, `in_stock`, `image_url`, `characterization`; RLS: own-row read/insert/update on `users_profile`, `reports`, `purchases`; `products_master` readable by authenticated; similar-tab per B0.3. Test: Tomer runs it; a curl with the anon key gets 401 on select, and a signed-in user can insert into `users_profile`. Unblocks ח2.
+
+**B2 — Catalogue loader** (`reco-engine` stays read-only; put it in `app/scripts/load_products.js`, Node built-ins): refresh the Jane snapshot with `reco-engine/inventory/fetch_ultra.js` (Tomer runs it), then map raw pages → `products_master` rows as in G2, with the terpene alias map (G5). Output a JSON/CSV that Tomer uploads via the dashboard or a service-key upsert run from his machine (key never in the repo). Test: row count = number of flowers (168 today); spot-check Lakota's parents and terpenes against the raw page. Unblocks ח3.
+
+**B3 — Minimum app fixes and deploy:** `dir="rtl"`; lazy Supabase client (build without env); flavor + earthy chips in onboarding (G4); show category, price, stock in recommendation cards; allow profile update (G12). Deploy per B0.2 with env vars. Test: TEST_PLAN part ג runs end to end on one phone. Unblocks ח1, ח4 → **the pilot can run on the real app.**
+
+**B4 — Strain page** `/strain/[strain_id]` from `products_master` (genetics, terpenes, price, stock, image), linked from recommendation cards and the report form. Test: ב16-style screenshots from the app.
+
+**B5 — Engine port:** move the mockup's `predict/geneOf/score/explain` into `lib/engine.js`, drive it from `users_profile` + `liked_strains` + own `reports`/`purchases` (G7, G8). Test: with seeds RS11 / Lakota / Triple C and no reports, the top 10 equals the mockup's demo ranking on the same 112 products (fixture test in `app/scripts/`).
+
+**B6 — Journal + feedback:** `/journal` listing own reports and purchases, "bought again" counter, verdicts feeding the score. Test: a liked report moves the strain up with the "סימנת שאהבת" reason.
+
+**B7 — Reviews and photos** (after pilot feedback): Storage bucket, upload on the report form, aggregated anonymous review block on the strain page, disclaimers.
+
+**B8 — Doctor report, stock/price alerts, scheduled catalogue refresh.**
+
+In parallel, no code: file the Cannabiz approval document (G14); write the survey export script (G15); fix the mockup's `dPickClear` if the mockup is edited again (G16).
+
+Minimum to unblock TEST_PLAN part ג: B0 → B1 → B2 → B3.
+
+## 5. What was checked and how
+
+- Read every file of `app/` (all 8 source files, fully), the whole survey `index.html`, the survey `schema.sql` and `DEPLOY.md`, the mockup's HTML skeleton and all of its JavaScript, `handoff.md`, both reco-engine reports and briefs, the reco-engine test runners, the scraper README and `scrape.mjs` header.
+- Measured: raw Jane page coverage (parents, terpenes, images, reviews) with a Node one-liner over `data/raw/jane_2026-09-24/`; terpene id sets in raw pages and in `products.json`; mockup product count and demo names; survey product list categories.
+- Ran: `npm install --no-package-lock` and `npm run build` twice in `app/` (without and with placeholder env values); `node test/run.js` and `node test/run_stage1.js` in a scratch **copy** of reco-engine (10/10 and 13/13 pass). `git status` in all four repos: clean and in sync with origin; no unpushed commits.
+- Did **not**: fetch any URL (no requests to GitHub Pages, Supabase, Jane or Cannabiz); run a browser; run the scraper; modify anything outside `app/AUDIT.md`, `app/TEST_PLAN.md`, `app/PROGRESS.md`; push.
+- Unverifiable from here, needs Tomer: whether an app Supabase project already exists and what it contains; whether the app is deployed anywhere; whether the survey page is still reachable (last confirmed 2026-09-25 in the survey's `PROGRESS.md`); whether the Cannabiz approval covers public display of ratings.
