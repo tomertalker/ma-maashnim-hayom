@@ -10,10 +10,10 @@ Session facts (2026-09-25): Node v20.19.2, npm 9.2.0. `npm install --no-package-
 - [x] 3. `TEST_PLAN.md`: Part A survey (א1–א20, runnable), Part B mockup (ב1–ב17, runnable; ב15 is the recommendation-quality check), Part C app (ג1–ג15, blocked by ח1–ח4). Hebrew for the testers.
 - [x] 4. `AUDIT.md` §3 gaps G1–G16 ordered by what blocks the pilot, §4 build order B0–B8 (minimum to unblock the app: B0→B1→B2→B3), §5 verification record.
 - [x] 5. Summary reported to Tomer (2026-09-26, in Hebrew). Waiting for B0 decisions; nothing built.
-  - Step 5 done 2026-09-25: summary reported to Tomer.
 
 ## Step 1 brief (2026-09-26, `/sdcard/Download/mmh/STEP1_BRIEF.md`)
 
 - [x] 0. `/root/mmh/CLAUDE.md` created (outside any repo) with the project rules from the brief.
 - [x] 1. Decisions recorded in `AUDIT.md` §6 "Decisions 2026-09-26": D1-D4e, the server check for GitHub Pages, the schema plan (not built), open questions, and a revised build order that replaces §4. The §1.1 deployment row is corrected by §6: the repo homepage field names a Vercel URL. Committed and pushed.
-- [ ] 2. Catalogue enrichment in reco-engine. Tracked in `reco-engine/PROGRESS.md`.
+- [x] 2. Catalogue enrichment in reco-engine (commit d6bbf12, pushed). Flowers with parents 0 → 158 of 168, with terpenes 0 → 108. Full suite 36/36. Details in `reco-engine/REPORT_STAGE2.md`.
+- [x] 3. Stopped and reported. Next step waits for Tomer.
