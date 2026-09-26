@@ -224,3 +224,122 @@ Minimum to unblock TEST_PLAN part ג: B0 → B1 → B2 → B3.
 - Ran: `npm install --no-package-lock` and `npm run build` twice in `app/` (without and with placeholder env values); `node test/run.js` and `node test/run_stage1.js` in a scratch **copy** of reco-engine (10/10 and 13/13 pass). `git status` in all four repos: clean and in sync with origin; no unpushed commits.
 - Did **not**: fetch any URL (no requests to GitHub Pages, Supabase, Jane or Cannabiz); run a browser; run the scraper; modify anything outside `app/AUDIT.md`, `app/TEST_PLAN.md`, `app/PROGRESS.md`; push.
 - Unverifiable from here, needs Tomer: whether an app Supabase project already exists and what it contains; whether the app is deployed anywhere; whether the survey page is still reachable (last confirmed 2026-09-25 in the survey's `PROGRESS.md`); whether the Cannabiz approval covers public display of ratings.
+
+---
+
+## 6. Decisions 2026-09-26
+
+Source: `/sdcard/Download/mmh/STEP1_BRIEF.md` §1. This section **supersedes §4** (build order) and the schema notes in §1.1.1 and B1. It also corrects §1.1: the "Deployed" row said "Unknown". The GitHub repo's homepage field is `https://ma-maashnim-hayom.vercel.app` (read with `gh repo view` on 2026-09-26; the URL itself was not opened). So a Vercel deployment probably existed, and its environment variables would name the app's original Supabase project. GitHub Pages is not enabled on the repo. The repo is public.
+
+### 6.1 Decisions
+
+| # | Decision | Consequence |
+|---|---|---|
+| D1 | **Supabase:** a new project for the app, region EU (Frankfurt). Tomer creates it and will send the URL and the publishable key later. The survey project (`yernxedmokifcmpakzgd`, Sydney) stays separate. | Resolves G1. The schema (§6.3) is written only after the project exists. The key goes into build-time env vars only (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`), never into the repo. |
+| D2 | **Pilot hosting:** static export to GitHub Pages if nothing in the app needs a server. Paid hosting is decided before the wide launch. | Resolves G3. The check is in §6.2: nothing in the pilot scope needs a server. |
+| D3 | **One recommendation engine:** the mockup's engine becomes a shared module in reco-engine, used by both the mockup and the app. Recommendation quality is tested on the mockup this week. | Replaces the old B5 plan ("port into `app/lib/engine.js`"). The mockup must behave the same until the test week ends, so results stay comparable. |
+| D4 | **Community feed (required):** patients scroll other patients' reviews: bag photos, ratings and text, plus the reviewer's indication category and dosage. No identifying details. | G9 becomes required. The rules are D4a–D4e. |
+| D4a | The browser never reads other users' raw rows. It reads only a public view or database function that returns published reviews with whitelisted fields. | Base tables get own-row RLS only. The two cross-user queries in `app/recommendations/page.js:119-137` must go: under own-row RLS they would silently return only the caller's rows. |
+| D4b | Publishing a review to the feed is opt-in. Showing indication and dosage with it is a separate opt-in. | Two booleans per review, both default false (§6.3). |
+| D4c | Broad categories only: indication category, dosage band, licence category. No names, phone numbers, exact age, city or exact dates. | Onboarding stores categories. The feed shows a month, not a date. |
+| D4d | Photos: strip EXIF/GPS on the device before upload (re-encode). Tell the user not to include prescriptions, receipts, faces or name labels. | Re-encode through a canvas on the device (§6.3). The warning is shown next to the photo picker. |
+| D4e | "Similar patients" shows aggregates only for groups at or above a configurable minimum (default 5). Below it, show nothing. | A settings row read by a database function. With 3-4 pilot testers this tab will always be empty; that is expected. |
+
+### 6.2 Does anything need a server? (D2 check)
+
+**Today's app: no.**
+- All four pages are client components (`"use client"` at line 1 of `app/page.js` and the three page files).
+- There is no `app/api/`, no `middleware.js`, no server action, no `next/image`, and no use of cookies or headers.
+- Data flows from the browser through supabase-js (`lib/supabaseClient.js`).
+- `next build` already marks every route static (○) (§1.1).
+
+**What static export on GitHub Pages needs (part of B4):**
+- `output: 'export'`, `basePath: '/ma-maashnim-hayom'` (or a custom domain), `trailingSlash: true`.
+- The 13 raw `<a href="/…">` links must become `next/link`, because raw anchors ignore `basePath`. They are in `app/page.js:69-71`, `app/onboarding/page.js:277, 420, 500, 501`, `app/recommendations/page.js:229-231` and `app/report/page.js:380-382`. The single `router.push` (`app/recommendations/page.js:170`) already respects `basePath`.
+- A strain page as one static page with a query parameter (`/strain/?id=…`), not a pre-rendered page per product (see the legal note below).
+- A GitHub Actions workflow that builds with the two `NEXT_PUBLIC_*` values stored as Actions variables.
+- Supabase Auth "Site URL" and redirect URLs set to the Pages URL, so email-confirmation links land on the app.
+
+**Planned features that need server-side code.** None of them needs a Next.js server. Each can be a Supabase Edge Function or a scheduled GitHub Action:
+1. Account and data deletion: deleting an Auth user needs the service-role key.
+2. Stock and price alerts: a scheduled job plus a sender (web push or email).
+3. Scheduled catalogue refresh from Jane, within the approval's limits (`reco-engine/inventory/LEAD_DECISION.json` owner limits).
+4. Optional: tell Tomer when a review is flagged.
+
+**Not server-side:** the feed and the aggregates (Postgres functions), photo EXIF stripping (on the device), and the doctor report (browser print to PDF).
+
+**Legal note:** pre-rendering strain pages would publish Jane catalogue data as public HTML on github.io. The formal Cannabiz approval is still pending (G14). Until it confirms public display, catalogue rows are fetched at runtime and are readable by signed-in users only.
+
+### 6.3 Schema plan (not built)
+
+Written as SQL only after D1's project exists (B1). All tables are in `public` with RLS on. `anon` gets no table access.
+
+| Table | Purpose | Columns (changes from the de-facto schema in §1.1.1) | Access |
+|---|---|---|---|
+| `users_profile` | private profile | today's columns, except: exact `age` → `age_band` (18+ checked at entry); add `indication_category`, `dosage_band`, `license_category` (fixed lists, §6.4); add `consent_aggregates` boolean and `consent_at`; drop the hidden defaults (G4) | select / insert / update own row (`user_id = auth.uid()`); no delete through the API (B8) |
+| `products_master` | catalogue | loaded from `reco-engine/data/catalog_<date>.enriched.json`: `jane_product_id` (primary key, replaces `strain_id`), `jane_store_product_id`, `sku`, names, `category` plus the T and C split, `product_type`, `characterization`, `price`, `in_stock`, `grower`, `brand`, `country`, `parent1_strains`, `parent2_strains`, `strain`, `terpenes` (jsonb), `missing` (jsonb reasons), `fetched_at` | select for `authenticated` only; no writes through the API (Tomer loads it from the dashboard) |
+| `reports` | a review; the row itself stays private | today's columns, plus `verdict` (like / unsure / dislike), `stars` 1-5, `publish_to_feed` boolean default false, `share_context` boolean default false (check: requires `publish_to_feed`), `published_at`, `hidden` boolean default false (moderation) | select / insert / update / delete own rows |
+| `review_photos` | photo metadata | `id`, `report_id`, `object_path`, `width`, `height`, `created_at`; at most 3 per review (proposal) | own rows, through ownership of the report |
+| `purchases` | as today | unchanged | own rows |
+| `app_settings` | configuration | key and value; `similar_min_group = 5` | no API access; read inside functions; Tomer edits it in the dashboard |
+| `feed_flags` | abuse reports | `report_id`, `reason`, `created_at` | insert for `authenticated`; no select |
+
+**Database functions.** All are `security definer` with a fixed `search_path`. Execute is granted to `authenticated` only.
+- `feed_page(p_offset, p_limit ≤ 50)`: one row per review where `publish_to_feed` is true and `hidden` is false.
+  - Returns: review id (a random UUID), product (`jane_product_id` and names), verdict, stars, relief and effect fields, like and dislike reasons, side-effect flags, text, photo object paths, and `published_month`.
+  - `indication_category`, `dosage_band` and `license_category` come back only when `share_context` is true; otherwise they are null.
+  - Never returns: user id, email, age, gender, notes, purchases, or exact timestamps. Offset paging means no timestamp is ever used as a cursor.
+- `similar_aggregates()`: finds the caller's group, which is other users who gave `consent_aggregates` and share the caller's `indication_category` and `dosage_band` (definition open, §6.4).
+  - If the group has fewer members with reports than `similar_min_group`, it returns zero rows.
+  - Otherwise it returns one row per product: `n_users`, share liked, average relief.
+  - Proposal beyond the brief: a product row with `n_users` below the minimum is also dropped, because an average of 1-2 people exposes their individual ratings.
+- `is_feed_photo(path)`: a helper for the storage policy.
+
+**Storage.**
+- Bucket `review-photos`, private. Object path is `<report_id>/<random>.jpg`, with no user id in the path.
+- Insert: allowed when the report belongs to `auth.uid()`, the type is `image/jpeg`, and the size is ≤ 1.5 MB (proposal).
+- Select: allowed to the owner, or when `is_feed_photo(name)` is true. The app shows photos through signed URLs.
+
+**On the device (D4d).**
+- `createImageBitmap(file, {imageOrientation: 'from-image'})`, then a canvas of at most 1600 px, then `toBlob('image/jpeg', 0.85)`. Re-encoding drops every EXIF field, including GPS.
+- Hebrew warning next to the picker: no prescriptions, receipts, faces or name labels. Next to the review text: no names, phone numbers or city.
+
+**Pilot caveat.** In a group of 3-4 testers who know each other, opting in to show indication and dosage can identify the writer. The opt-in text should say so.
+
+### 6.4 Open questions for Tomer
+
+1. The exact lists for indication category, dosage band (for example the monthly grams on the licence) and licence category. For the licence, the survey's list (`ma-oved-lecha/index.html`, T22/C4 … T1/C22, other) is a candidate.
+2. The definition of "similar": proposed as same indication category and same dosage band.
+3. Should aggregates use all reports (with consent at sign-up) or only reviews published to the feed?
+4. How the app imports the shared engine. Proposal: a sync script copies `reco-engine/engine/*.js` into `app/lib/engine/`, and a test fails if the copies differ. A `package.json` at the reco-engine root would break Stage 1 test S11, which forbids npm dependencies.
+5. Moderation: who sets `hidden`, and how fast.
+6. Photo limits: proposed 3 per review, 1600 px, ≤ 1.5 MB.
+
+### 6.5 Build order (revised; replaces §4)
+
+Nothing is started without Tomer's OK. Each step ends with a commit.
+
+- **B0: decisions.** Done (§6.1). Open items are in §6.4.
+- **S2: catalogue enrichment in reco-engine** (Step 1 brief §2, next).
+  - Parents (both slots, as lists), Jane's named strain, and terpenes are carried from the raw Jane pages into the 215-product catalogue, with provenance and missing-value reasons.
+  - This feeds B2.
+- **B1: schema SQL per §6.3**, run by Tomer in the new EU project.
+  - Tests: anon cannot select any table; user A cannot read user B's rows; `feed_page` returns only published, whitelisted fields; `similar_aggregates` returns nothing below the minimum; the storage policies hold.
+- **B2: load `products_master`** from the enriched catalogue. The script outputs a file that Tomer uploads; no service key ever goes into a repo. Jane fields only.
+- **B3: shared engine in reco-engine.**
+  - Extract the mockup's knowledge tables and `predict`, `geneOf`, `score`, `explain` and `recommend` into a dependency-free module in `reco-engine/engine/`.
+  - Rebuild the mockup from a template, the module and the product data.
+  - Fixture test: the demo profile gets the same ranking as today, so this week's test results stay valid.
+  - Then adapt the engine to the enriched fields: both parent slots as lists, Jane parent ids as canonical keys, Jane's strain in place of the Cannabiz origin, null terpene percentages.
+  - A mockup built on the fresh catalogue is a new version with its own test round.
+- **B4: app static export, minimum fixes, and deploy to Pages** (§6.2 list).
+  - Also: `dir="rtl"`; a lazy Supabase client; onboarding asks flavours (G4) and the D4c categories; the profile becomes editable (G12); the similar tab calls `similar_aggregates()`.
+  - Test: TEST_PLAN part ג.
+- **B5: the app uses the shared engine; strain page** `/strain/?id=` with data fetched after login.
+- **B6: community feed** (D4).
+  - The report form gets two opt-in toggles, a photo picker with on-device re-encoding, and warnings. Add a feed page that reads only `feed_page()`, and a report-abuse button.
+  - Tests: an image with GPS in its EXIF uploads with no EXIF segment; reviews that did not opt in are absent from the feed; context is absent without its opt-in; below the minimum, similar returns nothing.
+- **B7: journal, and own reports feeding back into the score** (G8).
+- **B8: doctor report, alerts, scheduled refresh, account deletion.** These use the server-side pieces from §6.2.
+
+Minimum to unblock TEST_PLAN part ג: S2 → B1 → B2 → B4. Step numbers B1 and B2 keep the meaning TEST_PLAN ח2 and ח3 refer to.
