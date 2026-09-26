@@ -9,4 +9,4 @@ Session facts (2026-09-25): Node v20.19.2, npm 9.2.0. `npm install --no-package-
 - [x] 2. Patient-flow map F1–F17 with works / partial / missing and file:line evidence; mockup-vs-app feature lists; vocabulary mismatches → `AUDIT.md` §2.
 - [x] 3. `TEST_PLAN.md`: Part A survey (א1–א20, runnable), Part B mockup (ב1–ב17, runnable; ב15 is the recommendation-quality check), Part C app (ג1–ג15, blocked by ח1–ח4). Hebrew for the testers.
 - [x] 4. `AUDIT.md` §3 gaps G1–G16 ordered by what blocks the pilot, §4 build order B0–B8 (minimum to unblock the app: B0→B1→B2→B3), §5 verification record.
-- [ ] 5. Report summary to Tomer; build nothing until approved.
+- [x] 5. Summary reported to Tomer (2026-09-26, in Hebrew). Waiting for B0 decisions; nothing built.
