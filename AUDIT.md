@@ -343,3 +343,48 @@ Nothing is started without Tomer's OK. Each step ends with a commit.
 - **B8: doctor report, alerts, scheduled refresh, account deletion.** These use the server-side pieces from §6.2.
 
 Minimum to unblock TEST_PLAN part ג: S2 → B1 → B2 → B4. Step numbers B1 and B2 keep the meaning TEST_PLAN ח2 and ח3 refer to.
+
+---
+
+## 7. Pilot build 2026-10-11 (branch `pilot-v1`)
+
+This section records what was built and where it departs from §6. Where the two disagree, §7 is what the code does.
+
+### 7.1 Tomer's decisions on 2026-10-11
+
+| Question | Answer | Effect |
+|---|---|---|
+| Supabase project | The survey's project (`yernxedmokifcmpakzgd`, Sydney) for the pilot. | Replaces D1 (new EU project) for the pilot only. Every object is prefixed `mmh_`, so the survey's `responses` and `contacts` are untouched. Moving to an EU project later = run the same SQL there and change `lib/config.js`. |
+| Sign-in | A nickname and a password, unique per patient, so a patient can continue on another phone. "Nickname taken" must be handled. | Replaces e-mail sign-in. See 7.2. |
+| Scope | Card, purchase reports, feed, and the recommendation engine. | B4–B7 of §6.5 collapse into this one build. |
+| Newer local version on the phone? | "Maybe, needs checking." | Everything here is on a branch; `main` is untouched. |
+
+### 7.2 Departures from §6, and why
+
+| §6 plan | What was built | Why |
+|---|---|---|
+| Supabase Auth (e-mail + password), own-row RLS | Own accounts table: nickname + bcrypt hash, random session token stored as a SHA-256 hash, 180-day sessions, lockout after 8 wrong passwords in 15 minutes. All access through `security definer` functions that take the token; tables have RLS on and no policies. | Supabase Auth needs an e-mail address, and hosted projects reject made-up addresses. Function-only access is also what D4a asked for, applied to everything. Cost: no self-service password reset (Tomer resets with `mmh_admin_reset_password`). |
+| Photos in a private Storage bucket with signed URLs | Photos as JPEG bytes in the table `mmh_photos`, served by `mmh_photo()` to the writer, or to any signed-in patient once the review is published and not hidden. The server refuses anything that is not a whole JPEG, and any JPEG that still carries EXIF or XMP. Caps: 3 per review, 60 per patient. | Storage policies rely on Supabase Auth identities, which this build does not use. Also one SQL file is the whole setup. Fine at pilot scale (≤ 600 KB per photo, 3 per review); move to Storage with real Auth before a wide launch. |
+| `similar_aggregates()` over all consenting users, minimum group 5 (D4e) | No aggregate over private data at all. The feed has a "patients like me" filter and `mmh_stats` has a `like_me` count, both built only from reviews whose writers chose to show their indication. | With a handful of pilot users the min-5 aggregate would always be empty. Using only what a writer already chose to show needs no minimum and leaks nothing new. |
+| `products_master` columns | `mmh_products(id, data jsonb)`, loaded by `reco-engine/app/load_catalog.js` through `mmh_admin_load_catalog` with a key. | The loader runs from the phone with no dashboard upload; refreshing stock is one command. Catalogue stays out of this public repo and is readable by signed-in patients only (the §6.2 legal note). |
+| Supabase Auth rate limits | Own limits, all in `mmh_settings`: 40 sign-ups an hour per network address and 300 in all; 8 wrong passwords in 15 minutes per nickname and address, 30 an hour per nickname; 20 wrong invite codes an hour per address; 30 new reviews a day per patient. Three flags hide a review only when they come from patients with a card and an account older than 12 hours; `mmh_admin_unhide` makes the decision final. | Found by the independent review on 2026-10-12 (one caller could block all sign-ups in 10 seconds; three throwaway accounts could hide any review). |
+| Exact review vocabulary of the old app | The finalized review model: verdict like / unsure / dislike, 1–5 stars, "helped" and "bothered" lists, repeat-purchase counter. | It is the model decided after the mockup. |
+| Purity filters (irradiation, pesticide, indoor) | Not built. | Jane's data has no such fields; the old flags came from Cannabiz. |
+| Three-generation genetics | Parents from both Jane slots plus the named strain; a second generation is derived inside the catalogue where a parent strain is itself carried by another product (47 products today). | Grandparents were Cannabiz-derived. |
+
+### 7.3 What the engine changed against the mockup
+
+Same structure and weights (`.42 effect + .33 genetics + .15 direction + .10 taste`, verdict / repeat / budget boosts, sedation penalty). Changes, each answering a weakness Tomer listed on 2026-09-23: shared ancestors are weighted by rarity; a disliked strain lowers its relatives a little; the top of the list is spread across families; a product with no published terpenes gets a slightly-below-average effect score and says so, instead of zero; terpene order counts only when percentages are published; other patients' published verdicts add a small capped boost. Not done: any measurement of whether the ranking is right. That still needs the survey data and the pilot.
+
+### 7.4 Status of the §2 flow map after this build
+
+F1 consent and age gate: works. F2 sign up / sign in: works (nickname). F3 card: works, editable. F4 seed strains: works, optional. F5 recommendations: works. F6 similar patients: replaced by the "like me" filter (7.2). F7 strain page: works. F8 purchase → report: works. F9 review: works. F10 photos: works. F11 reviews visible to others: works (feed and strain page). F12 journal: works. F13 reports feed the ranking: works. F14 doctor report: works (print / save as PDF). F15 stock and price alerts: not built. F16 survey → engine: not built. F17 catalogue refresh: one command, manual.
+
+### 7.5 Open before a wide launch
+
+1. The written Cannabiz approval (G14). Until then the catalogue is shown to signed-in patients only.
+2. A privacy notice a lawyer has read: the app stores health-related answers, in Sydney for now.
+3. Real authentication with password recovery, photos in Storage, an EU project.
+4. Moderation is manual: three flags from established accounts hide a review; Tomer puts it back with `mmh_admin_unhide` or leaves it hidden.
+6. The network-address limits read the address the API gateway passes on (`cf-connecting-ip`, then `x-real-ip`, then `x-forwarded-for`). Which of these the hosted project forwards was not verified; if none, all callers share one bucket and the per-address limits act as global ones. A random invite code is the stronger gate.
+5. The stock date is whatever the last load was; nothing refreshes it automatically.

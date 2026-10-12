@@ -1,3 +1,5 @@
+> **2026-10-11:** Part C (ג) describes the February app, which the pilot build replaced. For the pilot app use the 7-step check in `PILOT_SETUP.md` §4; the automated version is `test/e2e.mjs`.
+
 # תוכנית בדיקה לפיילוט — "מה מעשנים היום"
 
 (TEST PLAN for human testers on a phone. Written in Hebrew because the testers read Hebrew screens. Step numbers are the reference for screenshots. Companion document: `AUDIT.md`.)
