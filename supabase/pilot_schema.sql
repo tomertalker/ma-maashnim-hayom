@@ -18,6 +18,14 @@
 --     so a failed login or a refused request can still be counted.
 --   * Limits: sign-ups and wrong passwords per network address, reviews and
 --     photos per patient. Numbers are in mmh_settings and can be changed there.
+--   * Approval (v3): a published review reaches other patients, the community
+--     counts and the engine only after Tomer approves it on /admin/. Changing
+--     its text, verdict, stars, chips or photos sends it back to the queue.
+--     Writers Tomer marks as trusted, or every writer while
+--     reviews_need_approval is false, are approved on save. "Verified
+--     purchase" is Tomer's mark on a review whose photo shows the bag.
+--     The /admin/ functions are callable from the browser but need the admin
+--     key, with a per-address limit on wrong keys.
 -- ============================================================================
 
 create schema if not exists extensions;
@@ -36,7 +44,8 @@ insert into public.mmh_settings (key, value) values
   ('signup_hourly_per_ip',  '40'),    -- a pharmacy's shared Wi-Fi is one address
   ('reviews_daily_cap',     '30'),
   ('photos_total_cap',      '60'),
-  ('invite_code',           'null')
+  ('invite_code',           'null'),
+  ('reviews_need_approval', 'true')
 on conflict (key) do nothing;
 
 create table if not exists public.mmh_patients (
@@ -52,6 +61,7 @@ create table if not exists public.mmh_patients (
   created_at    timestamptz not null default now(),
   last_seen     timestamptz not null default now()
 );
+alter table public.mmh_patients add column if not exists trusted boolean not null default false; -- reviews approved on save
 
 create table if not exists public.mmh_sessions (
   token_hash bytea primary key,
@@ -108,13 +118,25 @@ create table if not exists public.mmh_reviews (
   check (not share_context or publish)
 );
 alter table public.mmh_reviews add column if not exists ctx jsonb;              -- indication + dosage, frozen when saved
-alter table public.mmh_reviews add column if not exists moderated_at timestamptz; -- set by mmh_admin_unhide
+alter table public.mmh_reviews add column if not exists moderated_at timestamptz; -- Tomer put it back, or rejected it
+-- approval (v3). Added once: reviews already in the feed when it arrives stay there.
+do $$ begin
+  if not exists (select 1 from information_schema.columns
+                  where table_schema = 'public' and table_name = 'mmh_reviews' and column_name = 'approved_at') then
+    alter table public.mmh_reviews add column approved_at timestamptz;
+    update public.mmh_reviews set approved_at = coalesce(feed_at, now()) where publish and not hidden;
+  end if;
+end $$;
+alter table public.mmh_reviews add column if not exists verified_at timestamptz;  -- photo shows the purchase
 create unique index if not exists mmh_reviews_one_per_product
   on public.mmh_reviews(patient_id, product_id) where product_id is not null;
 create unique index if not exists mmh_reviews_one_per_free_name
   on public.mmh_reviews(patient_id, lower(product_name)) where product_id is null;
-create index if not exists mmh_reviews_feed
-  on public.mmh_reviews(feed_at desc) where publish and not hidden;
+drop index if exists public.mmh_reviews_feed;
+create index if not exists mmh_reviews_feed_ok
+  on public.mmh_reviews(feed_at desc) where publish and not hidden and approved_at is not null;
+create index if not exists mmh_reviews_queue
+  on public.mmh_reviews(updated_at) where publish and not hidden and approved_at is null;
 create index if not exists mmh_reviews_patient on public.mmh_reviews(patient_id);
 
 create table if not exists public.mmh_photos (
@@ -314,8 +336,28 @@ language sql stable security definer set search_path = public, extensions as $$
     'bothered', to_jsonb(r.bothered), 'note', r.note, 'source', r.source,
     'buys', r.buys, 'publish', r.publish, 'share_context', r.share_context,
     'hidden', r.hidden, 'created_at', r.created_at, 'updated_at', r.updated_at,
+    'approved', r.approved_at is not null, 'verified', r.verified_at is not null,
+    'rejected', r.hidden and r.moderated_at is not null,
     'photos', coalesce((select jsonb_agg(ph.id order by ph.created_at)
                           from public.mmh_photos ph where ph.review_id = r.id), '[]'::jsonb))
+$$;
+
+-- true when this writer's reviews skip the queue: Tomer trusts them, or approval is off
+create or replace function public.mmh__auto_approve(p_patient uuid) returns boolean
+language sql stable security definer set search_path = public, extensions as $$
+  select coalesce((select trusted from public.mmh_patients where id = p_patient), false)
+      or coalesce(public.mmh__bool(public.mmh__setting('reviews_need_approval')), true) = false
+$$;
+
+-- after the writer changed what others would see: back to the queue (a rejected
+-- review too, so a fixed one can be looked at again), unless it skips the queue
+create or replace function public.mmh__requeue(p_review uuid, p_patient uuid) returns void
+language sql security definer set search_path = public, extensions as $$
+  update public.mmh_reviews set
+    approved_at  = case when public.mmh__auto_approve(p_patient) and publish then now() else null end,
+    moderated_at = case when hidden and moderated_at is not null then null else moderated_at end,
+    hidden       = case when hidden and moderated_at is not null then false else hidden end
+  where id = p_review
 $$;
 
 -- --------------------------------------------------------------- account ----
@@ -519,7 +561,7 @@ begin
                                              and coalesce(r.ctx->'uses', '[]'::jsonb) ?| v_uses)
              ) as s
         from public.mmh_reviews r
-       where r.publish and not r.hidden and r.verdict is not null
+       where r.publish and not r.hidden and r.approved_at is not null and r.verdict is not null
          and r.product_id is not null and r.patient_id <> v_id
        group by r.product_id
     ) x), '{}'::jsonb));
@@ -545,6 +587,7 @@ language plpgsql security definer set search_path = public, extensions as $$
 declare v_id   uuid := public.mmh__auth(p_token);
         v_p    public.mmh_patients;
         v_r    public.mmh_reviews;
+        v_old  public.mmh_reviews;
         v_rid  uuid;
         v_pid  text;
         v_name text;
@@ -623,6 +666,7 @@ begin
     p_review := p_review || jsonb_build_object('verdict', v_verdict, 'stars', v_stars, 'helped', v_helped,
                   'bothered', v_bothered, 'note', v_note, 'publish', v_publish);
   end if;
+  v_old := v_r;
 
   update public.mmh_reviews set
     verdict  = case when p_review ? 'verdict'  then v_verdict  else verdict  end,
@@ -649,6 +693,16 @@ begin
     feed_at = case when publish then coalesce(feed_at, now()) else feed_at end
   where id = v_r.id
   returning * into v_r;
+
+  -- approval: new or changed content waits for Tomer; a re-buy alone does not
+  if v_new or v_r.verdict is distinct from v_old.verdict or v_r.stars is distinct from v_old.stars
+     or v_r.helped is distinct from v_old.helped or v_r.bothered is distinct from v_old.bothered
+     or v_r.note is distinct from v_old.note then
+    perform public.mmh__requeue(v_r.id, v_id);
+  elsif v_r.publish and not v_r.hidden and v_r.approved_at is null and public.mmh__auto_approve(v_id) then
+    update public.mmh_reviews set approved_at = now() where id = v_r.id;
+  end if;
+  select * into v_r from public.mmh_reviews where id = v_r.id;
   return jsonb_build_object('ok', true, 'created', v_new, 'review', public.mmh__review_json(v_r));
 end $$;
 
@@ -704,16 +758,22 @@ begin
   values (v_rid, v_id, v_full, v_thumb,
           case when p_w between 1 and 10000 then p_w end, case when p_h between 1 and 10000 then p_h end)
   returning id into v_pid;
+  -- a new photo is new content: the review waits for approval again
+  perform public.mmh__requeue(v_rid, v_id);
   return jsonb_build_object('ok', true, 'id', v_pid);
 end $$;
 
 create or replace function public.mmh_delete_photo(p_token text, p_id uuid) returns jsonb
 language plpgsql security definer set search_path = public, extensions as $$
 declare v_id uuid := public.mmh__auth(p_token);
+        v_rid uuid;
 begin
   if v_id is null then return public.mmh__err('auth'); end if;
-  delete from public.mmh_photos where id = p_id and patient_id = v_id;
+  delete from public.mmh_photos where id = p_id and patient_id = v_id returning review_id into v_rid;
   if not found then return public.mmh__err('not_found'); end if;
+  -- "verified purchase" rests on a photo; with none left it goes
+  update public.mmh_reviews set verified_at = null
+   where id = v_rid and not exists (select 1 from public.mmh_photos where review_id = v_rid);
   return jsonb_build_object('ok', true);
 end $$;
 
@@ -726,7 +786,7 @@ begin
   if v_id is null then return public.mmh__err('auth'); end if;
   select case when p_size = 'full' then ph.full_jpeg else ph.thumb_jpeg end into v_b
     from public.mmh_photos ph join public.mmh_reviews r on r.id = ph.review_id
-   where ph.id = p_id and (ph.patient_id = v_id or (r.publish and not r.hidden));
+   where ph.id = p_id and (ph.patient_id = v_id or (r.publish and not r.hidden and r.approved_at is not null));
   if v_b is null then return public.mmh__err('not_found'); end if;
   return jsonb_build_object('ok', true, 'jpeg', replace(encode(v_b, 'base64'), E'\n', ''));
 end $$;
@@ -734,7 +794,8 @@ end $$;
 -- ------------------------------------------------------------------ feed ----
 -- Whitelisted fields only. No patient id, no nickname, no exact time.
 -- p_kind: null | 'like' | 'dislike'. p_like_me: only writers who chose to show
--- their indication and share one with the caller.
+-- their indication and share one with the caller. Approved reviews only, plus
+-- the caller's own while they wait (marked pending).
 
 create or replace function public.mmh_feed(p_token text, p_offset int default 0, p_limit int default 20,
   p_product_id text default null, p_kind text default null, p_like_me boolean default false) returns jsonb
@@ -761,9 +822,11 @@ begin
                'photos', coalesce((select jsonb_agg(ph.id order by ph.created_at)
                                      from public.mmh_photos ph where ph.review_id = r.id), '[]'::jsonb),
                'ctx', case when r.share_context then r.ctx end,
+               'verified', r.verified_at is not null,
+               'pending', r.approved_at is null,
                'mine', r.patient_id = v_id) as item
         from public.mmh_reviews r
-       where r.publish and not r.hidden
+       where r.publish and not r.hidden and (r.approved_at is not null or r.patient_id = v_id)
          and (p_product_id is null or r.product_id = p_product_id)
          and (p_kind is null or r.verdict = p_kind)
          and (not coalesce(p_like_me, false)
@@ -782,7 +845,7 @@ declare v_id uuid := public.mmh__auth(p_token);
         v_n int;
 begin
   if v_id is null then return public.mmh__err('auth'); end if;
-  if not exists (select 1 from public.mmh_reviews where id = p_review_id and publish and not hidden) then
+  if not exists (select 1 from public.mmh_reviews where id = p_review_id and publish and not hidden and approved_at is not null) then
     return public.mmh__err('not_found');
   end if;
   insert into public.mmh_flags(review_id, patient_id, reason)
@@ -838,21 +901,24 @@ end $$;
 create or replace function public.mmh_admin_unhide(p_review_id uuid) returns text
 language plpgsql security definer set search_path = public, extensions as $$
 begin
-  update public.mmh_reviews set hidden = false, moderated_at = now() where id = p_review_id;
+  update public.mmh_reviews set hidden = false, moderated_at = now(), approved_at = coalesce(approved_at, now())
+   where id = p_review_id;
   if not found then return 'no such review'; end if;
   delete from public.mmh_flags where review_id = p_review_id;
   return 'ok';
 end $$;
 
 -- select * from public.mmh_admin_overview();   -- numbers for following the pilot
+drop function if exists public.mmh_admin_overview();
 create or replace function public.mmh_admin_overview()
-returns table(patients bigint, with_card bigint, reviews bigint, in_feed bigint, hidden bigint,
+returns table(patients bigint, with_card bigint, reviews bigint, in_feed bigint, pending bigint, hidden bigint,
               photos bigint, photo_mb numeric, flags bigint, products bigint, catalogue_from timestamptz)
 language sql stable security definer set search_path = public, extensions as $$
   select (select count(*) from public.mmh_patients),
          (select count(*) from public.mmh_patients where card is not null),
          (select count(*) from public.mmh_reviews),
-         (select count(*) from public.mmh_reviews where publish and not hidden),
+         (select count(*) from public.mmh_reviews where publish and not hidden and approved_at is not null),
+         (select count(*) from public.mmh_reviews where publish and not hidden and approved_at is null),
          (select count(*) from public.mmh_reviews where hidden),
          (select count(*) from public.mmh_photos),
          (select round(coalesce(sum(octet_length(full_jpeg) + octet_length(thumb_jpeg)), 0) / 1048576.0, 1) from public.mmh_photos),
@@ -891,6 +957,134 @@ begin
     'inactive', (select count(*) from public.mmh_products where not active));
 end $$;
 
+-- ------------------------------------------------------ admin, on /admin/ ----
+-- Callable from the browser, each with the admin key set above. Ten wrong keys
+-- in 15 minutes from one network address lock that address out for a while.
+
+-- null when the key is right, else an error code
+create or replace function public.mmh__admin_check(p_key text) returns text
+language plpgsql security definer set search_path = public, extensions as $$
+declare v_hash text := public.mmh__setting('admin_key_hash') #>> '{}';
+begin
+  if not public.mmh__rate('admin_fail', 10, interval '15 minutes', false) then return 'locked'; end if;
+  if v_hash is not null and p_key is not null and char_length(p_key) between 16 and 200
+     and v_hash = crypt(p_key, v_hash) then
+    return null;
+  end if;
+  insert into public.mmh_rate(kind, ip_hash) values ('admin_fail', public.mmh__ip_hash());
+  return 'admin_key';
+end $$;
+
+-- one review as Tomer sees it: the review, who wrote it (nickname and track
+-- record, never the card), and the flags on it
+create or replace function public.mmh__admin_item(r public.mmh_reviews) returns jsonb
+language sql stable security definer set search_path = public, extensions as $$
+  select public.mmh__review_json(r) || jsonb_build_object(
+    'ctx', case when r.share_context then r.ctx end,
+    'flags', (select count(*) from public.mmh_flags f where f.review_id = r.id),
+    'flag_reasons', coalesce((select jsonb_agg(distinct f.reason) from public.mmh_flags f
+                               where f.review_id = r.id and f.reason is not null), '[]'::jsonb),
+    'writer', (select jsonb_build_object(
+        'id', p.id, 'nick', p.nick, 'since', p.created_at, 'trusted', p.trusted, 'card', p.card is not null,
+        'reviews',  (select count(*) from public.mmh_reviews x where x.patient_id = p.id),
+        'approved', (select count(*) from public.mmh_reviews x where x.patient_id = p.id and x.approved_at is not null and not x.hidden),
+        'rejected', (select count(*) from public.mmh_reviews x where x.patient_id = p.id and x.hidden and x.moderated_at is not null),
+        'waiting',  (select count(*) from public.mmh_reviews x where x.patient_id = p.id and x.publish and not x.hidden and x.approved_at is null))
+      from public.mmh_patients p where p.id = r.patient_id))
+$$;
+
+-- the queue: reviews waiting for approval (oldest first) and reviews hidden by flags
+create or replace function public.mmh_admin_queue(p_key text) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare v_err text := public.mmh__admin_check(p_key);
+begin
+  if v_err is not null then return public.mmh__err(v_err); end if;
+  return jsonb_build_object('ok', true,
+    'need_approval', coalesce(public.mmh__bool(public.mmh__setting('reviews_need_approval')), true),
+    'counts', (select to_jsonb(o) from public.mmh_admin_overview() o),
+    'pending', coalesce((select jsonb_agg(public.mmh__admin_item(q) order by q.updated_at)
+                           from (select * from public.mmh_reviews r
+                                  where r.publish and not r.hidden and r.approved_at is null
+                                  order by r.updated_at limit 200) q), '[]'::jsonb),
+    'hidden', coalesce((select jsonb_agg(public.mmh__admin_item(q) order by q.updated_at desc)
+                          from (select * from public.mmh_reviews r
+                                 where r.hidden and r.moderated_at is null
+                                 order by r.updated_at desc limit 100) q), '[]'::jsonb));
+end $$;
+
+-- p_action: 'approve' | 'verify' (approve + verified purchase, needs a photo) | 'reject'
+create or replace function public.mmh_admin_moderate(p_key text, p_review_id uuid, p_action text) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare v_err text := public.mmh__admin_check(p_key);
+        v_r public.mmh_reviews;
+begin
+  if v_err is not null then return public.mmh__err(v_err); end if;
+  if p_action is null or p_action not in ('approve', 'verify', 'reject') then return public.mmh__err('action_invalid'); end if;
+  select * into v_r from public.mmh_reviews where id = p_review_id for update;
+  if v_r.id is null then return public.mmh__err('not_found'); end if;
+  if p_action = 'verify' and not exists (select 1 from public.mmh_photos where review_id = v_r.id) then
+    return public.mmh__err('no_photo');
+  end if;
+  if p_action = 'reject' then
+    update public.mmh_reviews set hidden = true, moderated_at = now(), approved_at = null, verified_at = null
+     where id = v_r.id returning * into v_r;
+  else
+    -- approving a review that flags had hidden puts it back for good, like mmh_admin_unhide
+    update public.mmh_reviews set approved_at = now(), hidden = false,
+           moderated_at = case when hidden then now() else moderated_at end,
+           verified_at = case when p_action = 'verify' then now() else verified_at end
+     where id = v_r.id returning * into v_r;
+    delete from public.mmh_flags where review_id = v_r.id and v_r.moderated_at is not null;
+  end if;
+  return jsonb_build_object('ok', true, 'review', public.mmh__admin_item(v_r));
+end $$;
+
+-- a trusted writer's reviews are approved on save; trusting also approves what is waiting
+create or replace function public.mmh_admin_trust(p_key text, p_patient_id uuid, p_trusted boolean) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare v_err text := public.mmh__admin_check(p_key);
+        v_n int := 0;
+begin
+  if v_err is not null then return public.mmh__err(v_err); end if;
+  update public.mmh_patients set trusted = coalesce(p_trusted, false) where id = p_patient_id;
+  if not found then return public.mmh__err('not_found'); end if;
+  if coalesce(p_trusted, false) then
+    update public.mmh_reviews set approved_at = now()
+     where patient_id = p_patient_id and publish and not hidden and approved_at is null;
+    get diagnostics v_n = row_count;
+  end if;
+  return jsonb_build_object('ok', true, 'approved', v_n);
+end $$;
+
+-- approval on or off. Off approves everything that is waiting.
+create or replace function public.mmh_admin_set_approval(p_key text, p_on boolean) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare v_err text := public.mmh__admin_check(p_key);
+        v_n int := 0;
+begin
+  if v_err is not null then return public.mmh__err(v_err); end if;
+  if p_on is null then return public.mmh__err('action_invalid'); end if;
+  insert into public.mmh_settings(key, value) values ('reviews_need_approval', to_jsonb(p_on))
+  on conflict (key) do update set value = excluded.value;
+  if not p_on then
+    update public.mmh_reviews set approved_at = now() where publish and not hidden and approved_at is null;
+    get diagnostics v_n = row_count;
+  end if;
+  return jsonb_build_object('ok', true, 'need_approval', p_on, 'approved', v_n);
+end $$;
+
+-- any photo, waiting or not
+create or replace function public.mmh_admin_photo(p_key text, p_id uuid, p_size text default 'thumb') returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare v_err text := public.mmh__admin_check(p_key);
+        v_b bytea;
+begin
+  if v_err is not null then return public.mmh__err(v_err); end if;
+  select case when p_size = 'full' then full_jpeg else thumb_jpeg end into v_b from public.mmh_photos where id = p_id;
+  if v_b is null then return public.mmh__err('not_found'); end if;
+  return jsonb_build_object('ok', true, 'jpeg', replace(encode(v_b, 'base64'), E'\n', ''));
+end $$;
+
 -- ---------------------------------------------------------------- grants ----
 
 do $$
@@ -908,7 +1102,8 @@ begin
              'mmh_nick_available','mmh_signup','mmh_login','mmh_logout','mmh_me','mmh_save_card',
              'mmh_change_password','mmh_delete_account','mmh_catalog','mmh_stats','mmh_my_reviews',
              'mmh_save_review','mmh_delete_review','mmh_add_photo','mmh_delete_photo','mmh_photo',
-             'mmh_feed','mmh_flag','mmh_admin_load_catalog') loop
+             'mmh_feed','mmh_flag','mmh_admin_load_catalog',
+             'mmh_admin_queue','mmh_admin_moderate','mmh_admin_trust','mmh_admin_set_approval','mmh_admin_photo') loop
     execute format('grant execute on function %s to anon, authenticated', f.sig);
   end loop;
 end $$;

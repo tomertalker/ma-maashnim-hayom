@@ -19,7 +19,8 @@ const sql = q => execFileSync("psql", [...PSQL, "-c", q], { encoding: "utf8" }).
 let pass = 0, fail = 0;
 const ok = (name, cond, extra) => { if (cond) { pass++; console.log("  ok  ", name); } else { fail++; console.log("  FAIL", name, extra !== undefined ? JSON.stringify(extra).slice(0, 300) : ""); } };
 
-const browser = await chromium.launch();
+// CHROME=/path/to/chrome uses an installed browser instead of a Playwright download
+const browser = await chromium.launch(process.env.CHROME ? { executablePath: process.env.CHROME } : {});
 const errors = [], outside = [];
 async function phone(dark) {
   const ctx = await browser.newContext({ viewport: { width: 412, height: 915 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,
@@ -46,6 +47,7 @@ async function waitURL(page, test, name = "stuck") {
 const next = page => page.locator(".foot .btn.primary").click();
 
 sql("truncate mmh_flags, mmh_photos, mmh_reviews, mmh_sessions, mmh_login_attempts, mmh_rate, mmh_patients cascade");
+sql("update mmh_settings set value='true' where key='reviews_need_approval'");   // v3: reviews wait for approval
 if (Number(sql("select count(*) from mmh_products where active")) < 100) { console.log("load the real catalogue first (reco-engine: node app/load_catalog.js)"); process.exit(2); }
 
 // ------------------------------------------------------------ patient A ----
@@ -121,6 +123,12 @@ await A.page.waitForTimeout(400);
 await shot(A.page, "08-strain", true);
 const st = await text(A.page);
 ok("strain page: name, bars, terpenes, genetics", st.includes(firstName) && st.includes("טרפנים") && st.includes("גנטיקה") && st.includes("למה זה מתאים לך"));
+// v3: a terpene explains itself on tap
+await A.page.locator(".card button.tag").first().click();
+await A.page.waitForSelector(".sheet dl");
+ok("tapping a terpene explains it: smell, where else, what was studied, how sure", /ריח וטעם/.test(await text(A.page)) && /נמצא גם ב/.test(await text(A.page)) && /ראשוני|אנקדוטלי|כמעט לא נחקר/.test(await text(A.page)));
+await shot(A.page, "08b-terpene-sheet");
+await A.page.locator(".sheet .btn.primary", { hasText: "סגירה" }).click();
 await A.page.locator(".foot .btn.primary", { hasText: "קניתי את זה" }).click();
 await waitURL(A.page, /\/report\//);
 await A.page.waitForSelector(".label .name");
@@ -143,6 +151,7 @@ await A.page.waitForSelector(".photos img");
 await A.page.waitForTimeout(500);
 await shot(A.page, "10-feed-A", true);
 ok("after saving, the feed shows the report as mine", (await text(A.page)).includes("הדיווח שלך") && (await text(A.page)).includes(firstName));
+ok("v3: until approved, the writer's own reports are marked as waiting", await A.page.locator(".tag.warn", { hasText: "ממתין לאישור" }).count() === 3);
 ok("purchase recorded as bought on a recommendation", sql("select source || '|' || stars || '|' || verdict from mmh_reviews where note like 'עוזר לי%'") === "reco|4|like");
 
 console.log("photo privacy");
@@ -153,6 +162,31 @@ ok("the test photo really carries EXIF with GPS", src.includes(Buffer.from("Exif
 ok("the stored photo is a JPEG", buf[0] === 0xff && buf[1] === 0xd8 && buf.length > 2000, buf.length);
 ok("the stored photo has no EXIF and no GPS", !buf.includes(Buffer.from("Exif")) && !buf.includes(Buffer.from("GPS-CANARY")));
 ok("the stored photo is within the size limit", buf.length <= 600000 && sql("select octet_length(thumb_jpeg) < 60000 from mmh_photos limit 1") === "t", buf.length);
+
+// --------------------------------------------------- Tomer approves (v3) ----
+console.log("Tomer approves on /admin/");
+sql("select mmh_admin_set_key('e2e-admin-key-000001')");
+const T = await phone(false);
+await T.page.goto(APP + "/admin/");
+await T.page.waitForSelector(".pw input");
+ok("the admin page asks for the key, not a patient sign-in", (await text(T.page)).includes("מפתח הניהול"));
+await T.page.fill(".pw input", "e2e-admin-key-000099");
+await T.page.locator("form .btn.primary").click();
+await T.page.waitForSelector(".err-box");
+ok("a wrong admin key is refused", (await text(T.page)).includes("לא נכון"));
+await T.page.fill(".pw input", "e2e-admin-key-000001");
+await T.page.locator("form .btn.primary").click();
+await T.page.waitForSelector("article.label");
+await T.page.waitForSelector("article .photos img");
+await T.page.waitForTimeout(300);
+await shot(T.page, "10b-admin-queue", true);
+ok("the queue shows A's three reports with the nickname for Tomer", await T.page.locator("article.label").count() === 3 && (await text(T.page)).includes("דני"));
+ok("Tomer sees the waiting photo", await T.page.locator("article .photos img").count() === 1);
+await T.page.locator("article", { has: T.page.locator(".photos") }).locator("button", { hasText: "רכישה מאומתת" }).click();
+await T.page.waitForFunction(() => document.querySelectorAll("article.label").length === 2);
+for (let i = 0; i < 2; i++) { await T.page.locator("article .btn.primary", { hasText: "לאשר" }).first().click(); await T.page.waitForFunction(n => document.querySelectorAll("article.label").length === n, 1 - i); }
+ok("all approved, one as a verified purchase", sql("select count(*) filter (where approved_at is not null) || '|' || count(*) filter (where verified_at is not null) from mmh_reviews") === "3|1");
+await shot(T.page, "10c-admin-empty");
 
 // ------------------------------------------------------------ patient B ----
 console.log("patient B: nickname taken, private report");
@@ -191,6 +225,7 @@ ok("the feed never shows the writer's nickname", !feedB.includes("דני"));
 ok("indication and dosage appear, because A chose to show them", feedB.includes("כאב, שינה") && feedB.includes("30 גרם בחודש"));
 ok("a month, not a date", /(ינואר|פברואר|מרץ|אפריל|מאי|יוני|יולי|אוגוסט|ספטמבר|אוקטובר|נובמבר|דצמבר) 20\d\d/.test(feedB) && !/\d{1,2}\.\d{1,2}\.20\d\d/.test(feedB));
 ok("B's feed shows the photo", await B.page.locator("article .photos img").count() === 1);
+ok("v3: the verified purchase is marked for B", await B.page.locator(".tag.ok", { hasText: "רכישה מאומתת" }).count() === 1);
 await shot(B.page, "13-feed-B-dark", true);
 await B.page.locator(".filters .chip", { hasText: "לא התאים" }).click();
 await B.page.waitForSelector(".empty");
@@ -275,15 +310,14 @@ await waitURL(A2.page, /\/journal\/?$/);
 await A2.page.waitForSelector("article.label");
 ok("turning sharing off on one report removes it from the feed", sql("select count(*) from mmh_reviews r join mmh_patients p on p.id=r.patient_id where p.nick='דני' and publish") === "2");
 
-await A2.page.locator(".nav a", { hasText: "הכרטיס שלי" }).click();
-await A2.page.waitForSelector("table.report");
-await shot(A2.page, "17-me", true);
-ok("the card is shown back to the patient", (await text(A2.page)).replace(/[\u2066\u2069]/g, "").includes("35–44") && (await text(A2.page)).includes("כאב, שינה"));
-await A2.page.locator("a.btn", { hasText: "עריכת הכרטיס" }).click();
+await shot(A2.page, "17-mine", true);
+ok("v3: one screen holds the card summary, the reports and the settings", (await text(A2.page)).includes("הכרטיס שלך") && (await text(A2.page)).includes("כאב, שינה")
+  && (await text(A2.page)).includes("עד 300 ₪") && (await text(A2.page)).includes("יציאה מהחשבון"));
+await A2.page.locator(".card a.btn", { hasText: "עריכה" }).click();
 await waitURL(A2.page, /\/card\/?$/);
 ok("editing opens pre-filled", await A2.page.locator('button.chip[aria-pressed="true"]', { hasText: "44" }).count() === 1);
 await chip(A2.page, "40"); await next(A2.page); await next(A2.page); await next(A2.page);
-await waitURL(A2.page, /\/me\/?$/);
+await waitURL(A2.page, /\/journal\/?$/);
 ok("the card can be corrected after saving", sql("select card->>'grams' from mmh_patients where nick='דני'") === "40");
 
 await A2.page.locator(".list button", { hasText: "יציאה מהחשבון" }).click();
@@ -291,7 +325,7 @@ await A2.page.waitForSelector(".hero h1");
 ok("sign out returns to the welcome screen and clears the phone", await A2.page.evaluate(() => !localStorage.getItem("mmh.session") && !localStorage.getItem("mmh.catalog")));
 
 console.log("account deletion");
-await B.page.locator(".nav a", { hasText: "הכרטיס שלי" }).click();
+await B.page.locator(".nav a", { hasText: "שלי" }).click();
 await B.page.locator(".list button", { hasText: "מחיקת החשבון" }).click();
 await B.page.fill(".sheet .pw input", "secret2");
 await shot(B.page, "18-delete-dark");
@@ -300,7 +334,22 @@ await B.page.waitForSelector(".hero h1");
 ok("deleting the account removes the patient and their reports", sql("select count(*) from mmh_patients where nick='מיכל'") === "0" && sql("select count(*) from mmh_reviews where product_name='זן מהחבר'") === "0");
 
 console.log("layout");
-for (const [name, p] of [["feed", "/"], ["reco", "/reco/"], ["journal", "/journal/"], ["me", "/me/"], ["report", "/report/"]]) {
+// v3: the tabs, the old "me" address, the guide
+ok("five tabs: feed, recommendations, report, guide, mine", (await A.page.locator(".nav a").allInnerTexts()).map(t => t.trim()).join("|") === "פיד|המלצות|דיווח|מדריך|שלי",
+  await A.page.locator(".nav a").allInnerTexts());
+await A.page.goto(APP + "/me/");
+await waitURL(A.page, /\/journal\/?$/, "me-redirect");
+ok("the old /me/ address lands on the merged screen", true);
+await A.page.goto(APP + "/reco/");
+await A.page.waitForSelector("a.label");
+ok("recommendations no longer repeat the liked strains as a second tab", !(await text(A.page)).includes("כבר אהבת"));
+await A.page.goto(APP + "/guide/#limonene");
+await A.page.waitForSelector("#limonene");
+await A.page.waitForTimeout(300);
+ok("the guide explains terpenes and opens at the one asked for", (await text(A.page)).includes("מה זה טרפנים") && (await A.page.locator("#limonene").innerText()).includes("קליפת לימון")
+  && await A.page.evaluate(() => { const r = document.getElementById("limonene").getBoundingClientRect(); return r.top < window.innerHeight && r.bottom > 0; }));
+await shot(A.page, "19-guide");
+for (const [name, p] of [["feed", "/"], ["reco", "/reco/"], ["journal", "/journal/"], ["guide", "/guide/"], ["report", "/report/"], ["admin", "/admin/"]]) {
   await A.page.goto(APP + p);
   await A.page.waitForSelector(".top h1");
   await A.page.waitForTimeout(300);

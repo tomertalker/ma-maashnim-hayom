@@ -18,6 +18,8 @@ export default function Shell({ children }) {
 
   useEffect(() => { if (needsCard && path !== "/card") router.replace("/card/"); }, [needsCard, path, router]);
 
+  // Tomer's moderation page: its own key, no patient sign-in
+  if (path === "/admin") return <main className="app bare">{children}<Toast text={toast} onDone={clearToast} /></main>;
   if (!ready) return <div className="splash" aria-busy="true">טוען…</div>;
   if (!session) return <Auth />;
   if (!me) {
@@ -42,8 +44,8 @@ export default function Shell({ children }) {
           {tab("/", "פיד", <IconFeed />)}
           {tab("/reco/", "המלצות", <IconSpark />, ["/reco", "/strain"])}
           <Link href="/report/" className="add"><span className="plus"><IconPlus /></span><span>דיווח</span></Link>
-          {tab("/journal/", "היומן שלי", <IconBook />)}
-          {tab("/me/", "הכרטיס שלי", <IconUser />)}
+          {tab("/guide/", "מדריך", <IconBook />)}
+          {tab("/journal/", "שלי", <IconUser />, ["/journal", "/me"])}
         </div></nav>
       ) : null}
       <Toast text={toast} onDone={clearToast} />

@@ -74,12 +74,12 @@ export default function CardPage() {
     try { localStorage.removeItem(DRAFT); } catch {}
     setMe(r); setBusy(false);
     say(failed ? `הכרטיס נשמר, אבל ${failed} מהזנים שסימנת לא נשמרו. אפשר להוסיף אותם ב״דיווח״.` : first ? "הכרטיס נשמר. אלה ההמלצות שלך" : "הכרטיס עודכן");
-    router.replace(first ? "/reco/" : "/me/");
+    router.replace(first ? "/reco/" : "/journal/");
   }
 
   return (
     <>
-      <Top title={first ? "הכרטיס שלך" : "עריכת הכרטיס"} onBack={step > 0 ? () => { setErr(""); setStep(step - 1); } : first ? null : () => goBack(router, "/me/")} />
+      <Top title={first ? "הכרטיס שלך" : "עריכת הכרטיס"} onBack={step > 0 ? () => { setErr(""); setStep(step - 1); } : first ? null : () => goBack(router, "/journal/")} />
       <div className="steps" aria-hidden="true">{steps.map((s, i) => <i key={s} className={i <= step ? "on" : ""} />)}</div>
       <p className="sub">שלב {step + 1} מתוך {steps.length}: {steps[step]}</p>
 

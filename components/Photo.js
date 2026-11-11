@@ -1,13 +1,14 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { rpc } from "../lib/api";
+import { rpc, adminRpc } from "../lib/api";
 
 const cache = new Map();   // "id:size" -> data URL
 
-async function fetchPhoto(id, size) {
+// admin: Tomer on /admin/ opens photos of reviews that are still waiting
+async function fetchPhoto(id, size, admin) {
   const k = id + ":" + size;
   if (cache.has(k)) return cache.get(k);
-  const r = await rpc("mmh_photo", { p_id: id, p_size: size });
+  const r = admin ? await adminRpc("mmh_admin_photo", { p_id: id, p_size: size }) : await rpc("mmh_photo", { p_id: id, p_size: size });
   if (!r.ok) return null;
   const url = "data:image/jpeg;base64," + r.jpeg;
   cache.set(k, url);
@@ -15,7 +16,7 @@ async function fetchPhoto(id, size) {
 }
 
 // A thumbnail that loads only when it scrolls into view; tap opens the full photo.
-export function Thumb({ id, onRemove }) {
+export function Thumb({ id, onRemove, admin }) {
   const ref = useRef(null);
   const [src, setSrc] = useState(cache.get(id + ":thumb") || null);
   const [full, setFull] = useState(null);
@@ -25,14 +26,14 @@ export function Thumb({ id, onRemove }) {
     if (src) return;
     const el = ref.current; if (!el) return;
     let live = true;
-    const load = () => fetchPhoto(id, "thumb").then(u => { if (live && u) setSrc(u); });
+    const load = () => fetchPhoto(id, "thumb", admin).then(u => { if (live && u) setSrc(u); });
     if (typeof IntersectionObserver === "undefined") { load(); return () => { live = false; }; }
     const io = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) { io.disconnect(); load(); } }, { rootMargin: "300px" });
     io.observe(el);
     return () => { live = false; io.disconnect(); };
-  }, [id, src]);
+  }, [id, src, admin]);
 
-  async function show() { setOpen(true); const u = await fetchPhoto(id, "full"); if (u) setFull(u); }
+  async function show() { setOpen(true); const u = await fetchPhoto(id, "full", admin); if (u) setFull(u); }
 
   return (
     <>
@@ -52,7 +53,7 @@ export function Thumb({ id, onRemove }) {
   );
 }
 
-export function Photos({ ids }) {
+export function Photos({ ids, admin }) {
   if (!ids || !ids.length) return null;
-  return <div className={"photos" + (ids.length === 1 ? " one" : "")}>{ids.map(id => <Thumb key={id} id={id} />)}</div>;
+  return <div className={"photos" + (ids.length === 1 ? " one" : "")}>{ids.map(id => <Thumb key={id} id={id} admin={admin} />)}</div>;
 }

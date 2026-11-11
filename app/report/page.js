@@ -111,6 +111,7 @@ export default function Report() {
     const r = await rpc("mmh_save_review", { p_review: review });
     if (r.error) { setBusy(""); return setErr(errText(r.error)); }
     const rid = r.review.id;
+    let final = r.review;
     setExisting(r.review);
     for (const id of drop) {
       const d = await rpc("mmh_delete_photo", { p_id: id });
@@ -130,10 +131,13 @@ export default function Report() {
     if (photosChanged && publish) {
       const p2 = await rpc("mmh_save_review", { p_review: { id: rid, publish: true, share_context: shareCtx } });
       if (p2.error) { await refreshReviews(); setBusy(""); return setErr(errText(p2.error)); }
+      final = p2.review;
     }
     await Promise.all([refreshReviews(), refreshStats()]);
     setBusy("");
-    say(photoErr ? "הדיווח נשמר, אבל תמונה לא עלתה: " + photoErr : publish ? "הדיווח נשמר ומופיע בפיד" : "הדיווח נשמר אצלך ביומן");
+    say(photoErr ? "הדיווח נשמר, אבל תמונה לא עלתה: " + photoErr
+      : !publish ? "הדיווח נשמר אצלך ביומן"
+      : final.approved ? "הדיווח נשמר ומופיע בפיד" : "הדיווח נשמר. יופיע לאחרים בפיד אחרי בדיקה");
     router.replace(publish ? "/" : "/journal/");
   }
 
@@ -219,7 +223,7 @@ export default function Report() {
           </Q>
 
           <div className="card" style={{ marginTop: 20 }}>
-            <Switch checked={publish} onChange={v => { setPublish(v); if (!v) setShareCtx(false); }} title="להציג בפיד, באופן אנונימי" hint="בלי שם, בלי כינוי ובלי תאריך מדויק. כבוי: הדיווח נשאר רק ביומן שלך." />
+            <Switch checked={publish} onChange={v => { setPublish(v); if (!v) setShareCtx(false); }} title="להציג בפיד, באופן אנונימי" hint="בלי שם, בלי כינוי ובלי תאריך מדויק. כל דיווח נבדק לפני שהוא מופיע לאחרים, כדי שהפיד יישאר אמין ובלי פרסום. כבוי: הדיווח נשאר רק אצלך." />
             {publish ? <Switch checked={shareCtx} onChange={setShareCtx} title="להציג גם סיבת שימוש ומינון" hint="עוזר למטופלים דומים למצוא דיווחים רלוונטיים." /> : null}
           </div>
         </>

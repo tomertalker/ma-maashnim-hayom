@@ -271,3 +271,19 @@ table.report th { font-size: 12px; color: var(--muted); font-weight: 600; }
   .app { max-width: none; padding: 0; }
   .card, .label { border-color: #999; break-inside: avoid; }
 }
+
+/* v3: approval, verified purchase, terpene guide, admin */
+.tag.warn { background: var(--warn-soft); color: var(--warn-ink); }
+.tag.ok { background: var(--pine-soft); color: var(--pine); font-weight: 600; }
+button.tag { min-height: 36px; border: 0; cursor: pointer; font: inherit; font-size: 13px; color: inherit; text-decoration: underline dotted; text-underline-offset: 3px; }
+button.tag.cls-indica, button.tag.cls-sativa, button.tag.cls-hybrid { text-decoration: none; }
+.admin-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.guide h3 { margin: 0; font-size: 18px; }
+.guide .card { scroll-margin-top: 16px; }
+.guide .card + .card { margin-top: 10px; }
+.guide dl { margin: 10px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 14px; }
+.guide dt { color: var(--muted); }
+.guide dd { margin: 0; }
+.guide .card:target { border-color: var(--pine); box-shadow: 0 0 0 2px var(--pine-soft); }
+.tier-txt { color: var(--muted); }
+.guide .sheet dl, .sheet .guide dl { margin-top: 4px; }

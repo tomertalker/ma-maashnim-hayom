@@ -4,13 +4,14 @@ import { useMemo, useState } from "react";
 import { useApp } from "../../components/AppContext";
 import { useReco } from "../../components/useReco";
 import { Why } from "../../components/Why";
-import { Seg, Stamp } from "../../components/ui";
+import { Stamp } from "../../components/ui";
 import { CLS, dateHe } from "../../lib/vocab";
 import { PHARMACY } from "../../lib/config";
 
+// Only strains the patient has not reported yet (or bought and not rated).
+// Strains they liked are in "שלי"; a second list of them here was a repeat.
 export default function Reco() {
   const { me, catalog, reviews } = useApp();
-  const [tab, setTab] = useState("new");
   const [cls, setCls] = useState("all");
   const [allCats, setAllCats] = useState(false);
   const [inBudget, setInBudget] = useState(false);
@@ -19,9 +20,9 @@ export default function Reco() {
 
   const rows = useMemo(() => {
     if (!reco) return [];
-    return reco.rows.filter(r => (tab === "new" ? r.status === "new" || r.status === "pending" : r.status === "like"))
+    return reco.rows.filter(r => r.status === "new" || r.status === "pending")
       .filter(r => cls === "all" || r.p.cls === cls);
-  }, [reco, tab, cls]);
+  }, [reco, cls]);
   const liked = reviews.filter(r => r.verdict === "like").length;
   const budget = me.card && me.card.budget;
 
@@ -35,25 +36,23 @@ export default function Reco() {
       <div className="top"><h1>המלצות בשבילך</h1></div>
       <p className="sub">לפי הכרטיס שלך{liked ? ` ו־${liked} זנים שאהבת` : ""}. מלאי {PHARMACY}{catalog.fetchedAt ? `, נכון ל־${dateHe(catalog.fetchedAt)}` : ""}.</p>
 
-      <Seg options={[["new", "חדש בשבילך"], ["like", "כבר אהבת"]]} value={tab} onChange={v => { setTab(v); setShown(12); }} />
-      <div className="filters" style={{ marginTop: 10 }} role="group" aria-label="סינון">
+      <div className="filters" role="group" aria-label="סינון">
         {[["all", "הכל"], ["indica", CLS.indica], ["hybrid", CLS.hybrid], ["sativa", CLS.sativa]].map(([v, l]) =>
           <button key={v} type="button" className="chip" aria-pressed={cls === v} onClick={() => { setCls(v); setShown(12); }}>{l}</button>)}
         {budget ? <button type="button" className="chip num" aria-pressed={inBudget} onClick={() => setInBudget(!inBudget)}>עד {budget} ₪</button> : null}
         <button type="button" className="chip" aria-pressed={allCats} onClick={() => setAllCats(!allCats)}>כל הקטגוריות</button>
       </div>
 
-      {!liked && tab === "new" ? (
+      {!liked ? (
         <div className="note" style={{ marginBottom: 12 }}>
           עוד לא סימנת זנים שאהבת, אז הדירוג נשען על הכרטיס בלבד. כל דיווח משפר אותו. <Link href="/report/" style={{ fontWeight: 700, textDecoration: "underline" }}>לדווח על זן</Link>
         </div>
       ) : null}
 
-      {tab === "new" && rows.length && rows[0].ex.G.length ? <div className="note" style={{ marginBottom: 12 }}>{rows[0].ex.G[0]}</div> : null}
+      {rows.length > 0 && rows[0].ex.G.length ? <div className="note" style={{ marginBottom: 12 }}>{rows[0].ex.G[0]}</div> : null}
 
       {!rows.length ? (
-        <div className="empty"><b>{tab === "like" ? "עוד אין זנים שסימנת כמומלצים" : "אין זנים שמתאימים לסינון"}</b>
-          {tab === "like" ? "זנים שתסמנו כמומלצים יופיעו כאן, מדורגים." : "אפשר להסיר סינון או לבחור \"כל הקטגוריות\"."}</div>
+        <div className="empty"><b>אין זנים שמתאימים לסינון</b>אפשר להסיר סינון או לבחור &quot;כל הקטגוריות&quot;.</div>
       ) : null}
 
       {rows.slice(0, shown).map((r, i) => (
@@ -77,6 +76,7 @@ export default function Reco() {
 
       <p className="small muted" style={{ marginTop: 22 }}>
         איך זה מחושב: טרפנים מול מה שחשוב לך, קרבה גנטית לזנים שאהבת, אינדיקה או סאטיבה מול שעות השימוש, וטעם. הקשר בין טרפנים להשפעה נשען על מחקר ראשוני ועל דיווחים, ולכן ליד כל נימוק מופיעה רמת הביסוס שלו. זו לא המלצה רפואית.
+        {" "}<Link href="/guide/" style={{ fontWeight: 700, textDecoration: "underline" }}>מה זה טרפנים?</Link>
       </p>
     </>
   );
