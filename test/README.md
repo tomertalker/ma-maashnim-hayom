@@ -5,8 +5,8 @@ Three layers. The first runs anywhere; the other two need a local Postgres.
 | What | Command | Needs |
 |---|---|---|
 | Recommendation engine, on a made-up catalogue | `node test/engine_test.mjs` | Node only |
-| Backend functions, access rules and abuse limits (155 checks) | `node test/db_test.mjs` | local Postgres + `local_api.mjs` |
-| The whole app on a phone-sized browser, two patients (63 checks) | `node test/e2e.mjs` | the above + built app + Playwright |
+| Backend functions, access rules, abuse limits and review approval (202 checks) | `node test/db_test.mjs` | local Postgres + `local_api.mjs` |
+| The whole app on a phone-sized browser, two patients and the admin page (76 checks) | `node test/e2e.mjs` | the above + built app + Playwright |
 
 ## Local stack
 
@@ -28,6 +28,13 @@ NEXT_PUBLIC_MMH_API_URL=http://127.0.0.1:54330 npm run build
 #    MMH_API_URL=http://127.0.0.1:54330 MMH_ADMIN_KEY=... node app/load_catalog.js
 PHOTO=/path/to/a-photo-with-gps.jpg node test/e2e.mjs           # screenshots land in /tmp/mmh-shots
 ```
+
+Without the private catalogue, `MMH_ADMIN_KEY=<key> node test/fake_catalog.mjs` loads 120 made-up products shaped like the real ones
+(Lakota, RS11 and Tamskal keep their names because `e2e.mjs` looks for them). To use an installed Chrome instead of a Playwright
+download: `CHROME=/usr/bin/google-chrome PLAYWRIGHT_DIR=<dir with playwright in node_modules>/ node test/e2e.mjs`.
+
+`db_test.mjs` runs everything with review approval off and then tests approval on its own. `e2e.mjs` runs with approval on and
+approves the reports on `/admin/` the way Tomer would.
 
 `e2e.mjs` checks, among other things, that a photo carrying EXIF and GPS is stored without them,
 that the feed never shows a nickname or an exact date, and that a private report stays private.

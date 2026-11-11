@@ -6,6 +6,7 @@ import { useApp } from "../../components/AppContext";
 import { useReco } from "../../components/useReco";
 import { Why } from "../../components/Why";
 import FeedCard from "../../components/FeedCard";
+import { TerpSheet } from "../../components/Terp";
 import { Stamp, Top, goBack } from "../../components/ui";
 import { rpc } from "../../lib/api";
 import { PARTS, TERP, normTerp } from "../../lib/engine/engine.mjs";
@@ -18,6 +19,7 @@ export default function Strain() {
   const { catalog, reviews, stats } = useApp();
   const [id, setId] = useState(null);
   const [feed, setFeed] = useState(null);
+  const [terp, setTerp] = useState(null);   // {k, p} open in the sheet
   const reco = useReco({ allCategories: true, budgetHard: false });
 
   const [fromReco, setFromReco] = useState(false);
@@ -86,12 +88,21 @@ export default function Strain() {
         {terps.length ? (
           <>
             <div className="tags">
-              {terps.map((t, i) => <span key={i} className="tag">{(t.k && TERP[t.k].he) || t.he || t.i}{typeof t.p === "number" && t.p > 0 ? <span className="num muted">&nbsp;{t.p}%</span> : null}</span>)}
+              {terps.map((t, i) => {
+                const name = (t.k && TERP[t.k].he) || t.he || t.i;
+                const pct = typeof t.p === "number" && t.p > 0 ? <span className="num muted">&nbsp;{t.p}%</span> : null;
+                return t.k
+                  ? <button key={i} type="button" className="tag" onClick={() => setTerp({ k: t.k, p: t.p })} aria-label={`${name}: מה זה`}>{name}{pct}</button>
+                  : <span key={i} className="tag">{name}{pct}</span>;
+              })}
             </div>
-            <p className="small muted" style={{ margin: "10px 0 0" }}>{hasPct ? "האחוזים מוצגים כפי שהם מופיעים בנתוני המוצר." : "רשימת הטרפנים פורסמה בלי אחוזים."}</p>
+            <p className="small muted" style={{ margin: "10px 0 0" }}>
+              לוחצים על טרפן כדי לראות מה הוא. {hasPct ? "האחוזים מוצגים כפי שהם מופיעים בנתוני המוצר." : "רשימת הטרפנים פורסמה בלי אחוזים."}
+            </p>
           </>
-        ) : <p className="muted" style={{ margin: 0 }}>לא פורסמו טרפנים למוצר הזה.</p>}
+        ) : <p className="muted" style={{ margin: 0 }}>לא פורסמו טרפנים למוצר הזה. <Link href="/guide/" style={{ textDecoration: "underline" }}>מה זה טרפנים?</Link></p>}
       </div>
+      {terp ? <TerpSheet k={terp.k} pct={terp.p} onClose={() => setTerp(null)} /> : null}
 
       <h2 className="h2">גנטיקה</h2>
       <div className="card">

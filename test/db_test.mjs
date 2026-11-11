@@ -23,6 +23,9 @@ const jpeg = (n, extra) => jpegBuf(n, extra).toString("base64");
 
 sql(`truncate mmh_flags, mmh_photos, mmh_reviews, mmh_sessions, mmh_login_attempts, mmh_rate, mmh_patients, mmh_products cascade;
      delete from mmh_settings where key in ('admin_key_hash'); update mmh_settings set value='null' where key='invite_code';`);
+// The sections before "approval" test everything else with approval off (as in v2).
+// The "approval" section at the end turns it on.
+sql(`update mmh_settings set value='false' where key='reviews_need_approval'`);
 
 console.log("access");
 for (const t of ["mmh_patients", "mmh_reviews", "mmh_photos", "mmh_products", "mmh_sessions", "mmh_settings", "mmh_flags"]) {
@@ -32,13 +35,15 @@ for (const t of ["mmh_patients", "mmh_reviews", "mmh_photos", "mmh_products", "m
 const NOARGS = { mmh__auth: { p_token: "x" }, mmh__new_session: { p_patient: "00000000-0000-0000-0000-000000000000" }, mmh__setting: { p_key: "invite_code" },
   mmh__ip_hash: {}, mmh__check_pass: { p_id: "00000000-0000-0000-0000-000000000000", p_pass: "x" }, mmh__rate: { p_kind: "x", p_limit: 1, p_window: "1 hour" },
   mmh_admin_set_key: { p_key: "0123456789abcdefgh" }, mmh_admin_reset_password: { p_nick: "a", p_new: "bbbbbbbb" }, mmh_admin_set_invite: { p_code: "x" },
-  mmh_admin_unhide: { p_review_id: "00000000-0000-0000-0000-000000000000" }, mmh_admin_overview: {} };
+  mmh_admin_unhide: { p_review_id: "00000000-0000-0000-0000-000000000000" }, mmh_admin_overview: {},
+  mmh__admin_check: { p_key: "x" }, mmh__auto_approve: { p_patient: "00000000-0000-0000-0000-000000000000" },
+  mmh__requeue: { p_review: "00000000-0000-0000-0000-000000000000", p_patient: "00000000-0000-0000-0000-000000000000" } };
 for (const [f, a] of Object.entries(NOARGS)) {
   const r = await rpc(f, a);
   ok(`anon cannot call ${f}`, r.status === 404 && r.body.code === "42501", r);
 }
-ok("only the 19 intended functions are callable by anon", sql(`select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace
-  where n.nspname='public' and p.proname like 'mmh%' and has_function_privilege('anon', p.oid, 'execute')`) === "19");
+ok("only the 24 intended functions are callable by anon", sql(`select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+  where n.nspname='public' and p.proname like 'mmh%' and has_function_privilege('anon', p.oid, 'execute')`) === "24");
 
 console.log("sign up and sign in");
 ok("free nickname", (await call("mmh_nick_available", { p_nick: "דני" })).available === true);
@@ -129,7 +134,7 @@ ok("feed shows only published reviews", feed.length === 3 && !feed.some(i => i.p
 const fl = feed.find(i => i.product_id === "lakota");
 ok("feed item has the review", fl.verdict === "like" && fl.stars === 4 && fl.buys === 2 && fl.note === "עוזר לי לישון" && fl.mine === false);
 ok("context shown only when chosen", fl.ctx && fl.ctx.uses.includes("pain") && fl.ctx.grams === "40" && feed.find(i => i.product_name === "זן מחבר").ctx === null);
-const allowed = ["id", "product_id", "product_name", "verdict", "stars", "helped", "bothered", "note", "source", "buys", "month", "photos", "ctx", "mine"];
+const allowed = ["id", "product_id", "product_name", "verdict", "stars", "helped", "bothered", "note", "source", "buys", "month", "photos", "ctx", "mine", "verified", "pending"];
 ok("feed fields are whitelisted", feed.every(i => Object.keys(i).every(k => allowed.includes(k))) && /^\d{4}-\d{2}$/.test(fl.month), Object.keys(fl));
 ok("no nickname, patient id or timestamp anywhere in the feed", !JSON.stringify(feed).includes("דני") && !/patient|created_at|updated_at|feed_at|T\d\d:\d\d/.test(JSON.stringify(feed)));
 ok("context never carries age or sex", !("age" in fl.ctx) && !("sex" in fl.ctx), fl.ctx);
@@ -314,6 +319,109 @@ ok("delisted strain: the feed still names it", (await call("mmh_feed", { p_token
 ok("delisted strain: the writer's journal still names it", (await call("mmh_my_reviews", { p_token: Hc })).reviews.find(r => r.id === pub.id).product_name === "זן איקס");
 ok("delisted strain: not in the catalogue any more", !(await call("mmh_catalog", { p_token: Hc })).products.some(p => p.id === "x1"));
 sql(`delete from mmh_reviews where product_id='x1'; delete from mmh_products where id='x1'`);
+
+
+console.log("approval");
+sql(`truncate mmh_flags, mmh_photos, mmh_reviews, mmh_sessions, mmh_login_attempts, mmh_rate, mmh_patients cascade;
+     update mmh_settings set value='true' where key='reviews_need_approval'`);
+const KEY = "pilot-admin-key-0001";
+const W = await call("mmh_signup", { p_nick: "writer", p_pass: "secret11" }, "10.3.0.1");
+const V = await call("mmh_signup", { p_nick: "viewer", p_pass: "secret11" }, "10.3.0.2");
+for (const t of [W, V]) await call("mmh_save_card", { p_token: t.token, p_card: { age: "25-34", uses: ["sleep"] }, p_share: true });
+const feedOf = async (t, pid = "lakota") => (await call("mmh_feed", { p_token: t, p_product_id: pid })).items;
+const wr = (await call("mmh_save_review", { p_token: W.token, p_review: { product_id: "lakota", verdict: "like", stars: 5, note: "מעולה", publish: true } })).review;
+ok("a new published review waits for approval", wr.publish === true && wr.approved === false);
+ok("others do not see it in the feed", (await feedOf(V.token)).length === 0);
+const wf = await feedOf(W.token);
+ok("the writer sees it in the feed, marked pending", wf.length === 1 && wf[0].mine && wf[0].pending === true);
+ok("it is not counted for others or the engine", !("lakota" in (await call("mmh_stats", { p_token: V.token })).stats));
+ok("a waiting review cannot be flagged", (await call("mmh_flag", { p_token: V.token, p_review_id: wr.id })).error === "not_found");
+const wp = await call("mmh_add_photo", { p_token: W.token, p_review_id: wr.id, p_full: jpeg(1000), p_thumb: jpeg(100) });
+ok("its photo is closed to others", (await call("mmh_photo", { p_token: V.token, p_id: wp.id })).error === "not_found");
+
+ok("queue refuses a wrong key", (await call("mmh_admin_queue", { p_key: "pilot-admin-key-9999" }, "10.3.9.1")).error === "admin_key");
+ok("queue refuses no key", (await call("mmh_admin_queue", { p_key: null }, "10.3.9.1")).error === "admin_key");
+const Q1 = await call("mmh_admin_queue", { p_key: KEY });
+const qi = Q1.pending && Q1.pending.find(x => x.id === wr.id);
+ok("the queue lists it with the writer's nickname and record", Q1.ok && Q1.need_approval === true && qi && qi.writer.nick === "writer" && qi.writer.waiting === 1 && qi.photos.length === 1 && qi.note === "מעולה", Q1);
+ok("the queue never carries the writer's card", !JSON.stringify(Q1).includes("\"age\""));
+ok("queue counts", Q1.counts.pending === 1 && Q1.counts.in_feed === 0, Q1.counts);
+ok("Tomer can open the waiting photo", (await call("mmh_admin_photo", { p_key: KEY, p_id: wp.id })).ok === true);
+for (let i = 0; i < 10; i++) await call("mmh_admin_queue", { p_key: "wrong-key-guess-" + i }, "10.3.9.9");
+ok("10 wrong keys lock that address, even with the right key", (await call("mmh_admin_queue", { p_key: KEY }, "10.3.9.9")).error === "locked");
+ok("other addresses still get in", (await call("mmh_admin_queue", { p_key: KEY }, "10.3.9.8")).ok === true);
+ok("unknown action refused", (await call("mmh_admin_moderate", { p_key: KEY, p_review_id: wr.id, p_action: "delete" })).error === "action_invalid");
+
+ok("approve", (await call("mmh_admin_moderate", { p_key: KEY, p_review_id: wr.id, p_action: "approve" })).ok === true);
+let vf = await feedOf(V.token);
+ok("approved: others see it", vf.length === 1 && vf[0].pending === false && vf[0].verified === false);
+ok("approved: counted for others", (await call("mmh_stats", { p_token: V.token })).stats.lakota.like === 1);
+ok("approved: photo opens for others", (await call("mmh_photo", { p_token: V.token, p_id: wp.id })).ok === true);
+await call("mmh_save_review", { p_token: W.token, p_review: { id: wr.id, bought: true } });
+ok("buying again keeps the approval", (await feedOf(V.token)).length === 1);
+await call("mmh_save_review", { p_token: W.token, p_review: { id: wr.id, note: "קנו אצל ספק X בזול" } });
+ok("changing the text sends it back to the queue", (await feedOf(V.token)).length === 0
+  && (await call("mmh_my_reviews", { p_token: W.token })).reviews[0].approved === false);
+await call("mmh_admin_moderate", { p_key: KEY, p_review_id: wr.id, p_action: "approve" });
+await call("mmh_save_review", { p_token: W.token, p_review: { id: wr.id, stars: 1 } });
+ok("changing the stars does too", (await feedOf(V.token)).length === 0);
+await call("mmh_admin_moderate", { p_key: KEY, p_review_id: wr.id, p_action: "approve" });
+await call("mmh_add_photo", { p_token: W.token, p_review_id: wr.id, p_full: jpeg(1000), p_thumb: jpeg(100) });
+ok("adding a photo does too", (await feedOf(V.token)).length === 0);
+// the app's own sequence: private first, photos, then publish again
+await call("mmh_admin_moderate", { p_key: KEY, p_review_id: wr.id, p_action: "approve" });
+await call("mmh_save_review", { p_token: W.token, p_review: { id: wr.id, publish: false } });
+await call("mmh_add_photo", { p_token: W.token, p_review_id: wr.id, p_full: jpeg(1000), p_thumb: jpeg(100) });
+await call("mmh_save_review", { p_token: W.token, p_review: { id: wr.id, publish: true } });
+ok("a photo added while private still needs approval once published", (await feedOf(V.token)).length === 0);
+
+const noPhoto = (await call("mmh_save_review", { p_token: W.token, p_review: { product_id: "rs11", verdict: "dislike", publish: true } })).review;
+ok("verified purchase needs a photo", (await call("mmh_admin_moderate", { p_key: KEY, p_review_id: noPhoto.id, p_action: "verify" })).error === "no_photo");
+const ver = await call("mmh_admin_moderate", { p_key: KEY, p_review_id: wr.id, p_action: "verify" });
+ok("approve as verified purchase", ver.ok && ver.review.verified === true && ver.review.approved === true);
+ok("the feed shows it as verified", (await feedOf(V.token))[0].verified === true);
+const myPh = (await call("mmh_my_reviews", { p_token: W.token })).reviews.find(r => r.id === wr.id).photos;
+for (const id of myPh) await call("mmh_delete_photo", { p_token: W.token, p_id: id });
+ok("with every photo removed, the mark goes", (await call("mmh_my_reviews", { p_token: W.token })).reviews.find(r => r.id === wr.id).verified === false);
+
+const rej = await call("mmh_admin_moderate", { p_key: KEY, p_review_id: noPhoto.id, p_action: "reject" });
+ok("reject", rej.ok && rej.review.rejected === true);
+ok("a rejected review stays out of every feed, the writer's too", (await feedOf(V.token, "rs11")).length === 0 && (await feedOf(W.token, "rs11")).length === 0);
+ok("the writer sees it marked rejected", (await call("mmh_my_reviews", { p_token: W.token })).reviews.find(r => r.id === noPhoto.id).rejected === true);
+ok("a rejected review is not in the queue", !(await call("mmh_admin_queue", { p_key: KEY })).pending.some(x => x.id === noPhoto.id));
+await call("mmh_save_review", { p_token: W.token, p_review: { id: noPhoto.id, note: "בלי פרסום הפעם" } });
+const back = (await call("mmh_my_reviews", { p_token: W.token })).reviews.find(r => r.id === noPhoto.id);
+ok("once the writer fixes it, it is back in the queue", back.rejected === false && back.approved === false
+  && (await call("mmh_admin_queue", { p_key: KEY })).pending.some(x => x.id === noPhoto.id));
+
+const tr = await call("mmh_admin_trust", { p_key: KEY, p_patient_id: qi.writer.id, p_trusted: true });
+ok("trusting a writer approves what is waiting", tr.ok && tr.approved === 1 && (await feedOf(V.token, "rs11")).length === 1, tr);
+const tnew = (await call("mmh_save_review", { p_token: W.token, p_review: { product_name: "זן חדש", verdict: "like", publish: true } })).review;
+ok("a trusted writer's new review is approved on save", tnew.approved === true);
+await call("mmh_admin_trust", { p_key: KEY, p_patient_id: qi.writer.id, p_trusted: false });
+const tnew2 = (await call("mmh_save_review", { p_token: W.token, p_review: { product_name: "זן נוסף", verdict: "like", publish: true } })).review;
+ok("untrusted again: back to waiting", tnew2.approved === false);
+ok("trust needs the key", (await call("mmh_admin_trust", { p_key: "pilot-admin-key-0002", p_patient_id: qi.writer.id, p_trusted: true })).error === "admin_key");
+
+const off = await call("mmh_admin_set_approval", { p_key: KEY, p_on: false });
+ok("approval off approves what is waiting", off.ok && off.approved >= 1 && (await call("mmh_admin_queue", { p_key: KEY })).pending.length === 0, off);
+const vNew = (await call("mmh_save_review", { p_token: V.token, p_review: { product_id: "lakota", verdict: "like", publish: true } })).review;
+ok("with approval off, a new review is approved on save", vNew.approved === true);
+ok("approval back on", (await call("mmh_admin_set_approval", { p_key: KEY, p_on: true })).need_approval === true);
+ok("set approval needs the key", (await call("mmh_admin_set_approval", { p_key: "nope-nope-nope-nope", p_on: false })).error === "admin_key");
+
+// flags still work on approved reviews, and the queue shows what they hid
+const F1 = await call("mmh_signup", { p_nick: "fl1", p_pass: "secret11" }, "10.3.1.1"), F2 = await call("mmh_signup", { p_nick: "fl2", p_pass: "secret11" }, "10.3.1.2");
+for (const t of [F1, F2]) await call("mmh_save_card", { p_token: t.token, p_card: { age: "25-34", uses: ["sleep"] } });
+sql(`update mmh_patients set created_at = now() - interval '2 days'`);
+for (const t of [F1, F2, W]) await call("mmh_flag", { p_token: t.token, p_review_id: vNew.id, p_reason: "מכירה או פרסום" });
+const Q2 = await call("mmh_admin_queue", { p_key: KEY });
+const hid = Q2.hidden.find(x => x.id === vNew.id);
+ok("a review hidden by flags is listed for Tomer with its flags", hid && hid.flags === 3 && hid.flag_reasons.includes("מכירה או פרסום"), Q2.hidden);
+await call("mmh_admin_moderate", { p_key: KEY, p_review_id: vNew.id, p_action: "approve" });
+ok("approving it puts it back for good", (await feedOf(W.token)).some(i => i.id === vNew.id)
+  && sql(`select count(*) from mmh_flags where review_id='${vNew.id}'`) === "0" && sql(`select moderated_at is not null from mmh_reviews where id='${vNew.id}'`) === "t");
+ok("overview counts waiting reviews", sql(`select pending >= 0 and in_feed > 0 from mmh_admin_overview()`) === "t");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

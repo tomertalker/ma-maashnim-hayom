@@ -22,6 +22,8 @@ export default function FeedCard({ item, byId, onFlag, compact }) {
           <div className="tags" style={{ marginTop: compact ? 0 : 8 }}>
             {p && p.cls ? <span className={"tag cls-" + p.cls}>{CLS[p.cls]}</span> : null}
             {p && p.cat && !compact ? <span className="tag en">{p.cat}</span> : null}
+            {item.mine && item.pending ? <span className="tag warn">ממתין לאישור, מוצג רק לך</span> : null}
+            {item.verified ? <span className="tag ok">✓ רכישה מאומתת</span> : null}
             {item.buys > 1 ? <span className="tag">נקנה {item.buys} פעמים</span> : null}
             {item.source === "reco" ? <span className="tag">נקנה לפי המלצה</span> : null}
             {item.source === "history" ? <span className="tag">ניסיון קודם</span> : null}
